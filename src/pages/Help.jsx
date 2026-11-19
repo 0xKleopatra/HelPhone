@@ -2900,6 +2900,13 @@ export default function Help() {
                 ZK PRIVACY CHECKPOINT
               </span>
               <span
+                data-testid="zk-checkpoint-status"
+                data-pending={
+                  zkStatus === "proving" || zkStatus === "recording"
+                    ? "true"
+                    : "false"
+                }
+                data-finalized={zkStatus === "recorded" ? "true" : "false"}
                 style={{
                   marginLeft: "auto",
                   padding: "2px 7px",
