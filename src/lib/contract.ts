@@ -32,6 +32,7 @@ import {
 } from "./footprint";
 import { verificationWindow } from "./ringBuffer";
 import { isEncryptedEnvelope } from "./crypto";
+import { validateZone } from "./privacy";
 
 /** Validate a Stellar Soroban contract ID (strkey 'C...' with CRC16 checksum).
  *  Throws immediately with a clear message instead of letting a malformed ID
@@ -1002,6 +1003,38 @@ export async function fundZone(publicInputsPrefix, amount, wallet) {
     throw new Error(
       "VITE_AEGIS_VAULT_ID not configured — deploy aegis_vault first",
     );
+
+  const prefixBytes =
+    publicInputsPrefix instanceof Uint8Array
+      ? publicInputsPrefix
+      : new Uint8Array(publicInputsPrefix);
+
+  if (prefixBytes.length !== 160) {
+    throw new Error("Invalid public inputs prefix length: must be exactly 160 bytes");
+  }
+
+  // Preflight against zone differential-privacy policy (#529) before submitting
+  const policy = await getZonePrivacyPolicy().catch(() => null);
+  if (policy && policy.enabled) {
+    const readWordU64 = (offset) => {
+      let val = 0n;
+      for (let i = 0; i < 32; i++) {
+        val = (val << 8n) | BigInt(prefixBytes[offset + i]);
+      }
+      return val;
+    };
+    const box = {
+      boxXMin: String(readWordU64(0)),
+      boxXMax: String(readWordU64(32)),
+      boxYMin: String(readWordU64(64)),
+      boxYMax: String(readWordU64(96)),
+    };
+    const check = validateZone(box, policy);
+    if (!check.ok) {
+      throw new Error(`Cannot submit fund_zone: non-compliant zone (${check.error})`);
+    }
+  }
+
   const signerAddress = await resolveWalletAddress(wallet);
   if (!signerAddress) throw new Error("Wallet address is not available yet");
   await ensureAccountFunded(signerAddress);
@@ -1016,11 +1049,7 @@ export async function fundZone(publicInputsPrefix, amount, wallet) {
         function: "fund_zone",
         args: [
           scv(signerAddress, { type: "address" }),
-          nativeToScVal(
-            publicInputsPrefix instanceof Uint8Array
-              ? publicInputsPrefix
-              : new Uint8Array(publicInputsPrefix),
-          ),
+          nativeToScVal(prefixBytes),
           scv(BigInt(amount), { type: "i128" }),
         ],
       }),
