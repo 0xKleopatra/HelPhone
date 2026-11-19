@@ -15,11 +15,11 @@ import {
   sanitizeWalletAddress,
   buildLocationProofZone,
   getSustainabilityStats,
+  getZonePrivacyPolicy,
+  validateAegisZone,
 } from "../lib/contract";
-import {
-  generateLocationProof,
-  buildHumanityPublicInputsBytes,
-} from "../lib/zk";
+import { buildPrivateLocationProofZone } from "../lib/privacy";
+import { generateLocationProof, buildHumanityPublicInputsBytes } from "../lib/zk";
 
 function sanitizeAddress(raw) {
   if (typeof raw !== "string") return "";
@@ -355,6 +355,7 @@ export default function VaultDashboard() {
   const [sustainability, setSustainability] = useState(null);
   const [treasury, setTreasury] = useState([]);
   const [treasuryLoading, setTreasuryLoading] = useState(true);
+  const [zonePrivacy, setZonePrivacy] = useState(null);
 
   // Real-time multi-asset treasury reserves (#541): refresh every 15s.
   useEffect(() => {
@@ -408,6 +409,7 @@ export default function VaultDashboard() {
 
   useEffect(() => {
     loadPayout();
+    getZonePrivacyPolicy().then(setZonePrivacy).catch(() => setZonePrivacy(null));
     setLoading(false);
   }, [loadPayout]);
 
