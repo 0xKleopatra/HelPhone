@@ -5,7 +5,7 @@ import MainLayout from "../components/layout/MainLayout";
 import Badge from "../components/shared/Badge";
 import styles from "./Ranking.module.css";
 import { cx } from "../styles/cssModules";
-import { annotateLeaderboard, type ReputationTier } from "../lib/rankingIntegrity";
+import { annotateLeaderboard, isProvenTierAllowed, type ReputationTier } from "../lib/rankingIntegrity";
 import { useFeatureFlag } from "../lib/featureFlags.js";
 import { sanitizeText } from "../lib/htmlSanitizer";
 
@@ -29,11 +29,13 @@ export default function Ranking() {
         // Local integrity events are empty until the sync pipeline feeds them;
         // annotateLeaderboard still labels newcomers as probationary (#772).
         const annotated = annotateLeaderboard(entries, []);
+        const provenAllowed = reputationGated && isProvenTierAllowed();
         const sorted = annotated.slice(0, 20).map((row) => ({
           responder: row.responder,
           total_arrivals: row.total_arrivals,
-          // Tier badges stay on when the integrity flag is enabled (#772).
-          tier: reputationGated ? row.tier : undefined,
+          // Tier badges stay on when the integrity flag is enabled (#772),
+          // and degrade to probationary when prover pins mismatch (#945).
+          tier: reputationGated ? (provenAllowed ? row.tier : "probationary") : undefined,
           score: row.score,
         }));
         setRows(sorted);

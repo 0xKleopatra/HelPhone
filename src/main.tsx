@@ -16,6 +16,7 @@ import {
 } from "./lib/resourceHints";
 import { startHeapForensics } from "./lib/heapForensics";
 import { startFlagSync } from "./lib/featureFlags";
+import { bootReputationPinCheck } from "./lib/rankingIntegrity";
 import { trackOfflineGap } from "./lib/telemetry";
 import App from "./App";
 import "./App.css";
@@ -58,6 +59,7 @@ function RouteFallback() {
 }
 
 initThemeEngine();
+bootReputationPinCheck();
 // Measure PBKDF2 latency off the critical path so a slow device is surfaced early.
 scheduleKeyDerivationBenchmark();
 
