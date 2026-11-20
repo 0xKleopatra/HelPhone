@@ -32,6 +32,7 @@ import {
 } from "./footprint";
 import { verificationWindow } from "./ringBuffer";
 import { isEncryptedEnvelope } from "./crypto";
+import { validateZone } from "./privacy";
 
 /** Validate a Stellar Soroban contract ID (strkey 'C...' with CRC16 checksum).
  *  Throws immediately with a clear message instead of letting a malformed ID
@@ -50,6 +51,10 @@ const DEFAULT_CONTRACT_ID = assertValidContractId(
   "CDP5XZ7UYCGSQBYRDYM2OEAUQJULBZPULSQXK7LGNAJTRXRG3VHZLSHY",
   "DEFAULT_CONTRACT_ID",
 );
+
+const MAX_PROOF_BYTES = 1024 * 1024;
+const MAX_ACTIVE_REQUEST_IDS = 500;
+const MAX_ACTIVE_REQUESTS_PAGE = 100;
 
 const ACTIVE_NETWORK_STORAGE_KEY = "helphone:active-network";
 const WALLET_ADDRESS_STORAGE_KEY = "helphone:wallet-address";
@@ -549,13 +554,27 @@ export async function getResponder(requestId, index) {
   );
 }
 
-export async function getActiveRequests(max = 500) {
-  return _withCache("getActiveRequests", [max], CACHE_TTL.short, async () => {
+export async function getActiveRequests(max = MAX_ACTIVE_REQUEST_IDS) {
+  const limit = Math.min(Math.max(Number(max) || 0, 0), MAX_ACTIVE_REQUEST_IDS);
+  return _withCache("getActiveRequests", [limit], CACHE_TTL.short, async () => {
     const sim = await simulateRead(contract.call("get_active_requests"));
     if (!sim.result) return [];
     const rawIds = scValToNative(sim.result.retval);
-    return rawIds.map((id) => safeToNumber(id)).slice(0, max);
+    return rawIds.map((id) => safeToNumber(id)).slice(0, limit);
   });
+}
+
+export async function getActiveRequestsPage(cursor = 0, limit = MAX_ACTIVE_REQUESTS_PAGE) {
+  const pageLimit = Math.min(
+    Math.max(Number(limit) || 0, 0),
+    MAX_ACTIVE_REQUESTS_PAGE,
+  );
+  const start = Math.max(Number(cursor) || 0, 0);
+  const ids = await getActiveRequests(MAX_ACTIVE_REQUEST_IDS);
+  return {
+    items: ids.slice(start, start + pageLimit),
+    nextCursor: start + pageLimit < ids.length ? start + pageLimit : null,
+  };
 }
 
 export async function getRequestCount() {
@@ -965,6 +984,9 @@ export async function claimAid(
     throw new Error(
       "VITE_AEGIS_VAULT_ID not configured — deploy aegis_vault first",
     );
+  const proof = proofBytes instanceof Uint8Array ? proofBytes : new Uint8Array(proofBytes);
+  if (proof.byteLength > MAX_PROOF_BYTES)
+    throw new Error(`Proof is ${proof.byteLength} bytes; maximum is 1 MiB`);
   const signerAddress = await resolveWalletAddress(wallet);
   if (!signerAddress) throw new Error("Wallet address is not available yet");
   await ensureAccountFunded(signerAddress);
@@ -984,11 +1006,7 @@ export async function claimAid(
               ? publicInputsBytes
               : new Uint8Array(publicInputsBytes),
           ),
-          nativeToScVal(
-            proofBytes instanceof Uint8Array
-              ? proofBytes
-              : new Uint8Array(proofBytes),
-          ),
+          nativeToScVal(proof),
         ],
       }),
     )
@@ -1002,6 +1020,38 @@ export async function fundZone(publicInputsPrefix, amount, wallet) {
     throw new Error(
       "VITE_AEGIS_VAULT_ID not configured — deploy aegis_vault first",
     );
+
+  const prefixBytes =
+    publicInputsPrefix instanceof Uint8Array
+      ? publicInputsPrefix
+      : new Uint8Array(publicInputsPrefix);
+
+  if (prefixBytes.length !== 160) {
+    throw new Error("Invalid public inputs prefix length: must be exactly 160 bytes");
+  }
+
+  // Preflight against zone differential-privacy policy (#529) before submitting
+  const policy = await getZonePrivacyPolicy().catch(() => null);
+  if (policy && policy.enabled) {
+    const readWordU64 = (offset) => {
+      let val = 0n;
+      for (let i = 0; i < 32; i++) {
+        val = (val << 8n) | BigInt(prefixBytes[offset + i]);
+      }
+      return val;
+    };
+    const box = {
+      boxXMin: String(readWordU64(0)),
+      boxXMax: String(readWordU64(32)),
+      boxYMin: String(readWordU64(64)),
+      boxYMax: String(readWordU64(96)),
+    };
+    const check = validateZone(box, policy);
+    if (!check.ok) {
+      throw new Error(`Cannot submit fund_zone: non-compliant zone (${check.error})`);
+    }
+  }
+
   const signerAddress = await resolveWalletAddress(wallet);
   if (!signerAddress) throw new Error("Wallet address is not available yet");
   await ensureAccountFunded(signerAddress);
@@ -1016,11 +1066,7 @@ export async function fundZone(publicInputsPrefix, amount, wallet) {
         function: "fund_zone",
         args: [
           scv(signerAddress, { type: "address" }),
-          nativeToScVal(
-            publicInputsPrefix instanceof Uint8Array
-              ? publicInputsPrefix
-              : new Uint8Array(publicInputsPrefix),
-          ),
+          nativeToScVal(prefixBytes),
           scv(BigInt(amount), { type: "i128" }),
         ],
       }),
@@ -1515,25 +1561,7 @@ export async function setAegisPayoutAmount(admin, amount, wallet) {
   return await sendWrite(tx, wallet, "set_payout_amount");
 }
 
-export async function getAegisCampaignBalance(campaignId) {
-  if (!AEGIS_VAULT_ID) return 0;
-  const sim = await simulateRead(
-    contract.call("campaign_balance", scv(campaignId, { type: "bytesN<32>" })),
-  );
-  if (!sim.result) return 0;
-  return safeToNumber(scValToNative(sim.result.retval));
-}
-
-export async function getAegisIsClaimed(nullifier) {
-  if (!AEGIS_VAULT_ID) return false;
-  const sim = await simulateRead(
-    contract.call("is_claimed", scv(nullifier, { type: "bytesN<32>" })),
-  );
-  if (!sim.result) return false;
-  return scValToNative(sim.result.retval) === true;
-}
-
-export async function upgradeAegisVault(newWasmHash, wallet) {
+export async function setAegisPrivacyParams(params, wallet) {
   if (!AEGIS_VAULT_ID) throw new Error("VITE_AEGIS_VAULT_ID not configured");
   const signerAddress = await resolveWalletAddress(wallet);
   if (!signerAddress) throw new Error("Wallet address is not available yet");
@@ -1546,13 +1574,39 @@ export async function upgradeAegisVault(newWasmHash, wallet) {
     .addOperation(
       Operation.invokeContractFunction({
         contract: AEGIS_VAULT_ID,
-        function: "upgrade",
-        args: [scv(newWasmHash, { type: "bytesN<32>" })],
+        function: "set_privacy_params",
+        args: [
+          scv(signerAddress, { type: "address" }),
+          nativeToScVal({
+            enabled: !!params.enabled,
+            epsilon_milli: Number(params.epsilonMilli),
+            sensitivity: Number(params.sensitivity),
+            tail_mult: Number(params.tailMult),
+            grid: Number(params.grid),
+            k_cells: Number(params.kCells),
+          }),
+        ],
       }),
     )
     .setTimeout(30)
     .build();
-  return await sendWrite(tx, wallet, "upgrade");
+  return await sendWrite(tx, wallet, "set_privacy_params");
+}
+
+export async function validateAegisZone(publicInputsPrefix) {
+  if (!AEGIS_VAULT_ID)
+    throw new Error("VITE_AEGIS_VAULT_ID not configured — deploy aegis_vault first");
+  const vault = new Contract(AEGIS_VAULT_ID);
+  const sim = await simulateRead(vault.call(
+    "validate_zone",
+    nativeToScVal(publicInputsPrefix instanceof Uint8Array
+      ? publicInputsPrefix
+      : new Uint8Array(publicInputsPrefix)),
+  ));
+  if (sim.error) {
+    throw new Error(typeof sim.error === "string" ? sim.error : "Zone validation failed");
+  }
+  return true;
 }
 
 // ── Multi-asset treasury (Aegis Vault, #541) ───────────────────
