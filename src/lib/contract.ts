@@ -1561,25 +1561,7 @@ export async function setAegisPayoutAmount(admin, amount, wallet) {
   return await sendWrite(tx, wallet, "set_payout_amount");
 }
 
-export async function getAegisCampaignBalance(campaignId) {
-  if (!AEGIS_VAULT_ID) return 0;
-  const sim = await simulateRead(
-    contract.call("campaign_balance", scv(campaignId, { type: "bytesN<32>" })),
-  );
-  if (!sim.result) return 0;
-  return safeToNumber(scValToNative(sim.result.retval));
-}
-
-export async function getAegisIsClaimed(nullifier) {
-  if (!AEGIS_VAULT_ID) return false;
-  const sim = await simulateRead(
-    contract.call("is_claimed", scv(nullifier, { type: "bytesN<32>" })),
-  );
-  if (!sim.result) return false;
-  return scValToNative(sim.result.retval) === true;
-}
-
-export async function upgradeAegisVault(newWasmHash, wallet) {
+export async function setAegisPrivacyParams(params, wallet) {
   if (!AEGIS_VAULT_ID) throw new Error("VITE_AEGIS_VAULT_ID not configured");
   const signerAddress = await resolveWalletAddress(wallet);
   if (!signerAddress) throw new Error("Wallet address is not available yet");
@@ -1592,13 +1574,39 @@ export async function upgradeAegisVault(newWasmHash, wallet) {
     .addOperation(
       Operation.invokeContractFunction({
         contract: AEGIS_VAULT_ID,
-        function: "upgrade",
-        args: [scv(newWasmHash, { type: "bytesN<32>" })],
+        function: "set_privacy_params",
+        args: [
+          scv(signerAddress, { type: "address" }),
+          nativeToScVal({
+            enabled: !!params.enabled,
+            epsilon_milli: Number(params.epsilonMilli),
+            sensitivity: Number(params.sensitivity),
+            tail_mult: Number(params.tailMult),
+            grid: Number(params.grid),
+            k_cells: Number(params.kCells),
+          }),
+        ],
       }),
     )
     .setTimeout(30)
     .build();
-  return await sendWrite(tx, wallet, "upgrade");
+  return await sendWrite(tx, wallet, "set_privacy_params");
+}
+
+export async function validateAegisZone(publicInputsPrefix) {
+  if (!AEGIS_VAULT_ID)
+    throw new Error("VITE_AEGIS_VAULT_ID not configured — deploy aegis_vault first");
+  const vault = new Contract(AEGIS_VAULT_ID);
+  const sim = await simulateRead(vault.call(
+    "validate_zone",
+    nativeToScVal(publicInputsPrefix instanceof Uint8Array
+      ? publicInputsPrefix
+      : new Uint8Array(publicInputsPrefix)),
+  ));
+  if (sim.error) {
+    throw new Error(typeof sim.error === "string" ? sim.error : "Zone validation failed");
+  }
+  return true;
 }
 
 // ── Multi-asset treasury (Aegis Vault, #541) ───────────────────
