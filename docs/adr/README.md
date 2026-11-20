@@ -40,6 +40,7 @@ unchecked CODEOWNERS review items.
 | [ADR-021](ADR-021-multi-vendor-cost-control.md) | Multi-Vendor Cost Control: Spending Envelopes & Kill-Switch Protocol | Proposed | ISP-147 |
 | [ADR-022](ADR-022-ble-proximity-relay.md) | BLE Proximity Relay: Authenticated Beacon Format & Shippable-Scope Decision | Deferred (expires 2027-Q1, owner: @helphone-pwa-owner) | ISP-113 / #783 |
 | [ADR-022](ADR-022-honest-dispatch-eta.md) | Honest Dispatch ETA: Ranges, Fatigue Pace, and Degraded-State Signalling | Proposed | ISP-105 / #775 |
+| [ADR-023](ADR-023-canonical-contract-workspace.md) | Canonical Soroban Contract Workspace | Proposed | #980 |
 <!-- ADR-INDEX-END -->
 ---
 
