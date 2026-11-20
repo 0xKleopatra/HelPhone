@@ -1,5 +1,6 @@
 import styles from "./Help.module.css";
 import { cx } from "../styles/cssModules";
+import { sanitizeText, SanitizedHtml } from "../lib/htmlSanitizer";
 import { useState, useEffect, useRef, Fragment, useCallback } from "react";
 // ── Field ops (ISP-131 rugged/SOS, ISP-134 NFC staging, ISP-135 radio) ──
 import RadioSheet from "../components/field/RadioSheet";
@@ -3818,7 +3819,7 @@ export default function Help() {
                           color: "#F4ECDC",
                         }}
                       >
-                        {selectedRequest.nickname || "Anonymous"}
+                        {sanitizeText(selectedRequest.nickname) || "Anonymous"}
                       </div>
                       {(() => {
                         const et = EMERGENCY_TYPES.find(
@@ -3842,7 +3843,7 @@ export default function Help() {
                           color: "rgba(242,236,220,0.4)",
                         }}
                       >
-                        {selectedRequest.contact || ""}
+                        {sanitizeText(selectedRequest.contact) || ""}
                       </div>
                     </div>
                     <button
@@ -3985,7 +3986,7 @@ export default function Help() {
                               color: "#F4ECDC",
                             }}
                           >
-                            {req.nickname || "Anonymous"}
+                            {sanitizeText(req.nickname) || "Anonymous"}
                           </div>
                           {(() => {
                             const et = EMERGENCY_TYPES.find(
@@ -4263,7 +4264,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -4294,7 +4295,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -4365,7 +4366,7 @@ export default function Help() {
                     closeButton={false}
                   >
                     <strong style={{ color: "#FF7A6B" }}>
-                      {req.nickname || "Anonymous"}
+                      {sanitizeText(req.nickname) || "Anonymous"}
                     </strong>
                     <br />
                     <span style={{ fontSize: "11px", color: "#a2a586" }}>
@@ -4685,7 +4686,7 @@ export default function Help() {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {profile.nickname || "Anonymous"}
+                      {sanitizeText(profile.nickname) || "Anonymous"}
                     </div>
                     <div
                       style={{
