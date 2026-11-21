@@ -72,6 +72,7 @@
     "build:release": "vite build && node scripts/license-compliance.js --out dist/licenses.json",
     "security:crypto-pins": "node scripts/check-crypto-pins.js",
     "security:reputation-pins": "node scripts/check-reputation-pins.js",
+    "security:flag-audit": "node scripts/audit-feature-flags.js --check",
     "security:cve-patch": "node scripts/auto-patch-cve.js",
     "security:cve-patch:apply": "node scripts/auto-patch-cve.js --apply",
     "security:maintainer-keys": "node scripts/security/verify_maintainer_keys.js",
