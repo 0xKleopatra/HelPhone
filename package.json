@@ -62,6 +62,7 @@
     "security:transitive-vuln": "node scripts/transitive-vulnerability-scanner.js",
     "security:wasm-verify": "bash scripts/verify-wasm-build.sh",
     "security:dep-health": "node scripts/monitor-dep-health.js --offline",
+    "security:dep-health:check": "node scripts/monitor-dep-health.js --offline --fail-on-known-bad",
     "security:commits": "node scripts/security/verify_commit_signatures.js --range origin/main..HEAD",
     "bundle": "node scripts/helphone-bundle.js",
     "bundle:verify": "node scripts/helphone-bundle.js verify",
