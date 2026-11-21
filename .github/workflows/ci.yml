@@ -401,6 +401,11 @@ jobs:
       - name: Crypto-core pin gate
         run: node scripts/check-crypto-pins.js
 
+      # Refs #945 — fails if reputation circuit, prover pins, and ranking
+      # flag generation drift out of alignment.
+      - name: Reputation prover pin alignment
+        run: node scripts/check-reputation-pins.js
+
       # Closes #599 — GitHub Security Advisory scan + minimum-patch plan.
       # Report-only here; scheduled patch PRs come from cve-patch-bot.yml.
       - name: CVE patch plan
