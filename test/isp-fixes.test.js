@@ -5,7 +5,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { AssetManager } from '../src/lib/assetManager'
 import { DispatchQueue } from '../src/lib/dispatchQueue'
-import { TelemetryRedactor } from '../src/lib/telemetryRedactor'
+import { TelemetryRedactor, hasPlaintextCoordinates } from '../src/lib/telemetryRedactor'
+import { TelemetryPipeline, createMemoryExporter, toOtlpJson } from '../src/lib/telemetry'
+import { TelemetryReceiver } from '../server/telemetry.js'
 import { computeReconciliationMerge, advanceVectorClock } from '../src/lib/crdtAdvanced'
 
 const STATUS_RANKS = {
@@ -300,5 +302,56 @@ describe('ISP-060: Telemetry Redaction & Privacy', () => {
     const drained = await redactor.drain()
     expect(redactor.getStats().bufferSize).toBe(0)
     expect(drained.length).toBeGreaterThanOrEqual(0)
+  })
+
+  it('redacts GPS attributes before buffering in TelemetryPipeline and OTLP export', async () => {
+    const exporter = createMemoryExporter()
+    const pipeline = new TelemetryPipeline({ exporter })
+    pipeline.record({
+      name: 'telemetry.frame',
+      priority: 'critical',
+      attributes: { lat: 40.7128, lng: -74.006, accuracy: 5 },
+    })
+
+    await pipeline.flush()
+    expect(exporter.batches.length).toBe(1)
+    const exportedSpan = exporter.batches[0][0]
+    expect(hasPlaintextCoordinates(exportedSpan.attributes)).toBe(false)
+    expect(exportedSpan.attributes?.geohash).toBeTruthy()
+
+    const otlp = toOtlpJson([{ ...exportedSpan, attributes: { lat: 40.7, lng: -74.0 } }])
+    const attrs = otlp.resourceSpans[0].scopeSpans[0].spans[0].attributes
+    expect(attrs.some((a) => a.key === 'lat' || a.key === 'lng')).toBe(false)
+  })
+
+  it('rejects deliberate JS fast-path bypass with plaintext coordinates or bad checksum', async () => {
+    const receiver = new TelemetryReceiver({ exporter: { async export() {} } })
+    const result = receiver.ingest([
+      {
+        name: 'telemetry.frame',
+        priority: 'normal',
+        attributes: { lat: 40.7128, lng: -74.006 },
+      },
+      {
+        name: 'telemetry.frame',
+        priority: 'normal',
+        checksum: 'deadbeef',
+        attributes: { geohash: 'dr5reg' },
+      },
+    ])
+    expect(result.accepted).toBe(0)
+    expect(result.dropped).toBe(2)
+
+    const orig = await redactor.redactEvent({
+      type: 'gps_report',
+      timestamp: Date.now(),
+      location: { lat: 40.7128, lng: -74.006 },
+      data: {},
+    })
+    const expectedChecksum = redactor.getStoredChecksum(orig)
+    expect(await redactor.verifyChecksum(orig, expectedChecksum)).toBe(true)
+
+    const bypassed = { ...orig, data: { ...orig.data, lat: 40.7128, lng: -74.006 } }
+    expect(await redactor.verifyChecksum(bypassed, expectedChecksum)).toBe(false)
   })
 })
