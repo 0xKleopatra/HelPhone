@@ -65,6 +65,27 @@ describe('ISP-063: Asset Manager with Workbox Quota', () => {
     const result = await manager.getAsset('missing.wasm')
     expect(result).toBeNull()
   })
+
+  it('evicts tier 3 first, then tier 2, while preserving tier 1 critical assets', async () => {
+    const criticalBlob = new Blob(['wasm'], { type: 'application/wasm' })
+    const tileBlob = new Blob(['tile'], { type: 'image/png' })
+    const renderBlob = new Blob(['render'], { type: 'application/json' })
+
+    await manager.cacheAsset({ url: 'aegis.wasm', type: 'critical', hash: 'h1', priority: 0, size: 4 }, criticalBlob)
+    await manager.cacheAsset({ url: 'tile-1.png', type: 'frequent', hash: 'h2', priority: 1, size: 4 }, tileBlob)
+    await manager.cacheAsset({ url: 'render-1.json', type: 'ephemeral', hash: 'h3', priority: 2, size: 6 }, renderBlob)
+
+    // First eviction pass drops tier 3 (ephemeral) first
+    await manager.evictUnderPressure()
+    expect(await manager.getAsset('render-1.json')).toBeNull()
+    expect(await manager.getAsset('tile-1.png')).toBeTruthy()
+    expect(await manager.getAsset('aegis.wasm')).toBeTruthy()
+
+    // Second eviction pass drops tier 2 (frequent) while tier 1 survives
+    await manager.evictUnderPressure()
+    expect(await manager.getAsset('tile-1.png')).toBeNull()
+    expect(await manager.getAsset('aegis.wasm')).toBeTruthy()
+  })
 })
 
 describe('ISP-062: Dispatch Priority Queue', () => {
