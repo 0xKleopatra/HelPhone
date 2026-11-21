@@ -15,6 +15,7 @@ const MAP_HEIGHT = 540;
 export default function CommunityMap({
   overlays,
   onRenderStats,
+  viewportTransform,
   mapInstance,
   resourceManager,
   longTaskThresholds = DEFAULT_LONG_TASK_THRESHOLDS,
@@ -160,6 +161,12 @@ export default function CommunityMap({
   useEffect(() => {
     rendererRef.current?.setOverlays(overlays ?? []);
   }, [overlays, mountKey, forceMain]);
+
+  useEffect(() => {
+    if (viewportTransform) {
+      rendererRef.current?.setViewport?.(viewportTransform);
+    }
+  }, [viewportTransform, mountKey, forceMain]);
 
   return (
     <div style={{ position: "relative", width: "100%" }}>
