@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { AssetManager } from '../src/lib/assetManager'
 import { DispatchQueue } from '../src/lib/dispatchQueue'
+import { detectPriority } from '../server/middleware/dispatchPriority'
 import { TelemetryRedactor, hasPlaintextCoordinates } from '../src/lib/telemetryRedactor'
 import { TelemetryPipeline, createMemoryExporter, toOtlpJson } from '../src/lib/telemetry'
 import { TelemetryReceiver } from '../server/telemetry.js'
@@ -127,6 +128,31 @@ describe('ISP-062: Dispatch Priority Queue', () => {
 
     await queue.process()
     expect(queue.getMetrics().critical + queue.getMetrics().low).toBeGreaterThanOrEqual(1)
+    expect(queue.getMetrics()).toHaveProperty('stalePrevented')
+    expect(queue.getMetrics().maxWaitTime).toBeLessThan(30_000)
+  })
+
+  it('reconciles P0-P3 tiers and enforces ADR-020 no-identity rule', () => {
+    queue.enqueue({ id: 'p0-req', priority: 'P0', payload: {}, timestamp: Date.now(), maxRetries: 1 })
+    queue.enqueue({ id: 'p3-req', priority: 'P3', payload: {}, timestamp: Date.now(), maxRetries: 1 })
+    const metrics = queue.getMetrics()
+    expect(metrics.critical).toBe(1)
+    expect(metrics.low).toBe(1)
+    expect(metrics.queued).toBe(2)
+
+    const responderReq = {
+      headers: { 'content-type': 'application/responder+json' },
+      body: { wallet: 'GABCDEF', note: 'routine check' },
+      path: '/api/dispatch/status',
+    }
+    expect(detectPriority(responderReq)).toBe('normal')
+
+    const hintedReq = {
+      headers: { 'x-priority': 'P0' },
+      body: {},
+      path: '/api/dispatch/payload/1',
+    }
+    expect(detectPriority(hintedReq)).toBe('critical')
   })
 })
 
