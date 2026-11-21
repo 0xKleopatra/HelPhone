@@ -53,6 +53,14 @@ command-internal: 7 days). Delete expired bundles per ISP-128 retention.
 Break-glass access is recorded in `audit-log.json` inside the bundle and
 must be reconciled against `docs/legal-compliance.md` audit requirements.
 
+Incident tapes (`scripts/build-incident-tape.js`) follow the same tier expiry
+and can be signed with a maintainer key (`--sign-key <pem> --key-id <id>`).
+`npm run bundle:verify` enforces bundle and incident-tape expiry as well as
+tape signatures. Scheduled retention sweeps (`scripts/sweep-incident-tapes.js`,
+`.github/workflows/tape-retention.yml`) move expired tapes to `.quarantine/`
+with JSONL audit events (`retention-audit.jsonl`), keeping them reversible
+within the 7-day grace window via `--restore <filename>` before permanent purge.
+
 ## Escalation order
 
 1. `collect --tier volunteer-safe` — share with responders/volunteers.
