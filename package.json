@@ -73,6 +73,8 @@
     "security:cve-patch": "node scripts/auto-patch-cve.js",
     "security:cve-patch:apply": "node scripts/auto-patch-cve.js --apply",
     "security:maintainer-keys": "node scripts/security/verify_maintainer_keys.js",
+    "security:key-ceremony": "node scripts/security/verify_maintainer_keys.js --ceremony --offline",
+    "security:codeowners-refresh": "node scripts/security/codeowners_refresh.js --check",
     "build:all": "npm run build && npm run build --workspace server --if-present",
     "security:binaries": "node scripts/security/strip_executables.js",
     "spike:webrtc": "vitest run test/webrtc-nat-spike.test.js",
