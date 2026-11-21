@@ -234,6 +234,34 @@ describe('ISP-061: CRDT Reconciliation for Split-Brain', () => {
     expect(result.merged.length).toBe(1)
     expect(result.conflicts.length).toBe(0)
   })
+
+  it('converges idempotently across 3 zones after a 72h partition without losing or downgrading aid records', () => {
+    const partitionStart = Date.now() - 72 * 60 * 60 * 1000
+    const zoneA = [
+      { key: 'aid:101', value: { status: 'open', priority: 'high' }, deleted: false, actor: 'zone-a', counter: 1, timestamp: partitionStart + 1000, instance: 'zone-a' },
+      { key: 'aid:102', value: { status: 'open', priority: 'low' }, deleted: false, actor: 'zone-a', counter: 2, timestamp: partitionStart + 2000, instance: 'zone-a' },
+    ]
+    const zoneB = [
+      { key: 'aid:101', value: { status: 'escalated', priority: 'critical' }, deleted: false, actor: 'zone-b', counter: 1, timestamp: partitionStart + 500, instance: 'zone-b' },
+      { key: 'aid:103', value: { status: 'assigned', priority: 'medium' }, deleted: false, actor: 'zone-b', counter: 2, timestamp: partitionStart + 3000, instance: 'zone-b' },
+    ]
+    const zoneC = [
+      { key: 'aid:101', value: { status: 'resolved', priority: 'low' }, deleted: false, actor: 'zone-c', counter: 1, timestamp: partitionStart + 71 * 60 * 60 * 1000, instance: 'zone-c' },
+    ]
+
+    const ab = computeReconciliationMerge(zoneA, zoneB, STATUS_RANKS, PRIORITY_RANKS)
+    const abc = computeReconciliationMerge(ab.merged, zoneC, STATUS_RANKS, PRIORITY_RANKS)
+
+    expect(abc.merged).toHaveLength(3)
+    const aid101 = abc.merged.find((op) => op.key === 'aid:101')
+    expect(aid101.value.status).toBe('escalated')
+    expect(abc.conflicts.some((c) => c.includes('actor=zone-b') && c.includes('status:'))).toBe(true)
+
+    // Re-merging the same batch is a no-op (idempotent)
+    const remerged = computeReconciliationMerge(abc.merged, abc.merged, STATUS_RANKS, PRIORITY_RANKS)
+    expect(remerged.merged).toEqual(abc.merged)
+    expect(remerged.conflicts).toHaveLength(0)
+  })
 })
 
 describe('ISP-060: Telemetry Redaction & Privacy', () => {
