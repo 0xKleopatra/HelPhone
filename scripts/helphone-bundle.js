@@ -34,7 +34,6 @@ import {
   scrubText,
   scanForPii,
 } from "./security/env_firewall.js";
-import { verifyIncidentTape } from "../server/lib/incidentTape.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -247,109 +246,11 @@ function logSlice({ logFile, sinceMs }) {
   return kept.join("\n");
 }
 
-const FORENSIC_SIGNALS = [
-  "ts",
-  "jsHeapUsed",
-  "jsHeapLimit",
-  "workerQueueDepth",
-  "workerPendingBytes",
-  "workerHeartbeatAgeMs",
-  "yjsBytes",
-  "mapboxTiles",
-  "mapboxStyleBytes",
-  "ringBytes",
-  "wasmBytes",
-  "wasmGrowEvents",
-  "parserAllocBytes",
-  "storageUsage",
-  "storageQuota",
-];
-
-function normalizeForensicEnvelope(raw, now = Date.now()) {
-  if (raw && typeof raw === "object" && raw.schema === "helphone.forensics/1") {
-    const census = Array.isArray(raw.census)
-      ? raw.census.slice(-50).map((row) =>
-          Array.isArray(row)
-            ? FORENSIC_SIGNALS.map((_, i) =>
-                typeof row[i] === "number" && Number.isFinite(row[i])
-                  ? row[i]
-                  : null,
-              )
-            : FORENSIC_SIGNALS.map(() => null),
-        )
-      : [];
-    return {
-      schema: "helphone.forensics/1",
-      reason: raw.reason || "manual",
-      ts: typeof raw.ts === "number" && Number.isFinite(raw.ts) ? raw.ts : now,
-      ua: raw.ua || "other",
-      signals: FORENSIC_SIGNALS,
-      census,
-      breakdown:
-        raw.breakdown && typeof raw.breakdown === "object" ? raw.breakdown : {},
-      hints: raw.hints && typeof raw.hints === "object" ? raw.hints : {},
-    };
-  }
-  const mem =
-    typeof process !== "undefined" && typeof process.memoryUsage === "function"
-      ? process.memoryUsage()
-      : null;
-  const heapUsed =
-    typeof mem?.heapUsed === "number" && Number.isFinite(mem.heapUsed)
-      ? mem.heapUsed
-      : null;
-  const heapTotal =
-    typeof mem?.heapTotal === "number" && Number.isFinite(mem.heapTotal)
-      ? mem.heapTotal
-      : null;
-  return {
-    schema: "helphone.forensics/1",
-    reason: "manual",
-    ts: now,
-    ua: "other",
-    signals: FORENSIC_SIGNALS,
-    census: [
-      [
-        now,
-        heapUsed,
-        heapTotal,
-        0,
-        0,
-        null,
-        null,
-        null,
-        null,
-        6000,
-        null,
-        0,
-        0,
-        null,
-        null,
-      ],
-    ],
-    breakdown: heapUsed != null ? { jsHeapUsed: heapUsed, ringBytes: 6000 } : { ringBytes: 6000 },
-    hints: {},
-  };
-}
-
-function loadForensicSnapshot({ forensicEnvelope, forensicsFile, now }) {
-  if (forensicEnvelope) {
-    return normalizeForensicEnvelope(forensicEnvelope, now);
-  }
-  if (forensicsFile) {
-    const abs = path.isAbsolute(forensicsFile)
-      ? forensicsFile
-      : path.join(ROOT, forensicsFile);
-    if (fs.existsSync(abs)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(abs, "utf8"));
-        return normalizeForensicEnvelope(parsed, now);
-      } catch {
-        // fall back to synthesized envelope
-      }
-    }
-  }
-  return normalizeForensicEnvelope(null, now);
+function artifactOrEmpty(file, kind) {
+  if (!file) return JSON.stringify({ status: "empty", reason: `no ${kind} artifact supplied` }, null, 2);
+  const abs = path.isAbsolute(file) ? file : path.join(ROOT, file);
+  if (!fs.existsSync(abs)) return JSON.stringify({ status: "empty", reason: `${kind} artifact not found` }, null, 2);
+  return fs.readFileSync(abs);
 }
 
 // ── collect ─────────────────────────────────────────────────────────────────
@@ -360,8 +261,9 @@ export function collectBundle({
   out = "helphone-bundle.tgz",
   breakGlass = false,
   logFile = null,
-  forensicsFile = null,
-  forensicEnvelope = null,
+  ledgerFile = null,
+  metricsFile = null,
+  clientSlice = null,
   dispatch = false,
   extraFiles = {},
 } = {}) {
@@ -430,43 +332,9 @@ export function collectBundle({
   // build SBOM
   push("build/sbom.json", JSON.stringify(buildSbom(), null, 2), "build");
 
-  // ledger + metrics + client placeholders (collected when artifacts exist)
-  const contractScript = path.join(ROOT, "scripts/export-contract-state.sh");
-  push(
-    "ledger/contract-state.txt",
-    fs.existsSync(contractScript)
-      ? "# run scripts/export-contract-state.sh --window to populate\n"
-      : "# contract export not available in this checkout\n",
-    "scripts/export-contract-state.sh",
-  );
-  push(
-    "metrics/load-baseline.txt",
-    fs.existsSync(path.join(ROOT, "server/tests/load.js"))
-      ? fs
-          .readFileSync(path.join(ROOT, "server/tests/load.js"), "utf8")
-          .split("\n")
-          .slice(0, 40)
-          .join("\n")
-      : "# load baseline not available\n",
-    "server/tests/load.js",
-  );
-  push(
-    "client/README.txt",
-    "# Client ring/crash slices: export from the device via TelemetryLab-equivalent\n# (ringBuffer/crashRecovery) and re-run with --client-slice <file>.\n",
-    "src/lib",
-  );
-  if (!Object.prototype.hasOwnProperty.call(extraFiles, "client/heap-forensics.json")) {
-    const forensicSnap = loadForensicSnapshot({
-      forensicEnvelope,
-      forensicsFile,
-      now,
-    });
-    push(
-      "client/heap-forensics.json",
-      JSON.stringify(forensicSnap, null, 2),
-      "src/lib/heapForensics.ts",
-    );
-  }
+  push("ledger/state.json", artifactOrEmpty(ledgerFile, "ledger"), ledgerFile ?? "empty");
+  push("metrics/snapshot.txt", artifactOrEmpty(metricsFile, "metrics"), metricsFile ?? "empty");
+  push("client/slice.json", artifactOrEmpty(clientSlice, "client"), clientSlice ?? "empty");
 
   // operator-supplied extras
   for (const [name, content] of Object.entries(extraFiles)) {
@@ -549,14 +417,7 @@ export function collectBundle({
   return { manifest, out: outAbs, bytes: tgz.length };
 }
 
-export function verifyBundle(
-  tgzPath,
-  {
-    now = new Date(),
-    tapePublicKey = process.env.HELPHONE_TAPE_PUBLIC_KEY || null,
-    requireTapeSignature = false,
-  } = {},
-) {
+export function verifyBundle(tgzPath) {
   const abs = path.isAbsolute(tgzPath)
     ? tgzPath
     : path.join(process.cwd(), tgzPath);
@@ -567,14 +428,6 @@ export function verifyBundle(
   if (!manifestEntry) throw new Error("manifest.json missing");
   const manifest = JSON.parse(manifestEntry.data.toString("utf8"));
   const problems = [];
-
-  if (manifest.expiresAt) {
-    const expMs = Date.parse(manifest.expiresAt);
-    if (!Number.isFinite(expMs) || expMs <= now.getTime()) {
-      problems.push(`bundle expired: ${manifest.expiresAt}`);
-    }
-  }
-
   for (const f of manifest.files || []) {
     const entry = byName.get(f.path);
     if (!entry) {
@@ -583,27 +436,6 @@ export function verifyBundle(
     }
     const digest = sha256(entry.data);
     if (digest !== f.sha256) problems.push(`hash mismatch: ${f.path}`);
-
-    if (/(?:^|\/)(?:.*incident-tape.*\.json|.*\.tape\.json)$/i.test(f.path)) {
-      try {
-        const tapeDoc = JSON.parse(entry.data.toString("utf8"));
-        if (tapeDoc.signature || requireTapeSignature) {
-          const tapeCheck = verifyIncidentTape(tapeDoc, tapePublicKey, { now });
-          if (!tapeCheck.ok) {
-            for (const p of tapeCheck.problems) {
-              problems.push(`${f.path}: ${p}`);
-            }
-          }
-        } else if (tapeDoc.expiresAt) {
-          const tExp = Date.parse(tapeDoc.expiresAt);
-          if (!Number.isFinite(tExp) || tExp <= now.getTime()) {
-            problems.push(`${f.path}: incident tape expired at ${tapeDoc.expiresAt}`);
-          }
-        }
-      } catch (err) {
-        problems.push(`${f.path}: invalid incident tape JSON (${err.message})`);
-      }
-    }
   }
   return { ok: problems.length === 0, problems, manifest };
 }
@@ -629,7 +461,9 @@ function cliMain(argv) {
       out: flags.out || "helphone-bundle.tgz",
       breakGlass: !!flags.breakGlass,
       logFile: flags["log-file"] || null,
-      forensicsFile: flags.forensics || flags["forensics-file"] || null,
+      ledgerFile: flags["ledger-file"] || null,
+      metricsFile: flags["metrics-file"] || null,
+      clientSlice: flags["client-slice"] || null,
       dispatch: !!flags.dispatch,
     });
     console.log(
@@ -640,16 +474,10 @@ function cliMain(argv) {
   if (cmd === "verify") {
     const target = argv[1];
     if (!target) {
-      console.error("usage: helphone-bundle verify <bundle.tgz> [--tape-key <pub.pem>]");
+      console.error("usage: helphone-bundle verify <bundle.tgz>");
       return 2;
     }
-    const tapePublicKey = flags["tape-key"]
-      ? fs.readFileSync(path.resolve(flags["tape-key"]), "utf8")
-      : process.env.HELPHONE_TAPE_PUBLIC_KEY || null;
-    const result = verifyBundle(target, {
-      tapePublicKey,
-      requireTapeSignature: argv.includes("--require-tape-signature"),
-    });
+    const result = verifyBundle(target);
     if (!result.ok) {
       for (const p of result.problems) console.error(`FAIL ${p}`);
       return 1;
