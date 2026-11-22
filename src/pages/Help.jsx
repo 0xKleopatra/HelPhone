@@ -1746,6 +1746,9 @@ export default function Help() {
     canAutoDispatch: canSosAutoDispatch,
     onCommit: handleSosCommit,
     onNeedsConfirm: () => setShowSosSheet(true),
+    // Coordinates are not stored in the offline queue (PII redaction), so the
+    // drain reads the device's current fix when it sends.
+    getLocation: () => (location ? { lat: location[0], lng: location[1] } : null),
   });
 
   const styleSelectorRef = useRef(null);
