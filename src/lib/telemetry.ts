@@ -26,6 +26,13 @@ import {
   type NetworkClass,
   type NetworkProfile,
 } from './networkEstimator';
+import {
+  TelemetryRedactor,
+  hasPlaintextCoordinates,
+  redactTelemetryAttributes,
+  type AggregatedTelemetry,
+  type TelemetryEvent,
+} from './telemetryRedactor';
 
 export type TelemetryDropReason =
   | RingDropReason
@@ -63,6 +70,9 @@ export interface TelemetryPipelineOptions {
   networkClass?: NetworkClass;
   exporter?: TelemetryExporter | null;
   outbox?: TelemetryOutbox | null;
+  redactor?: TelemetryRedactor;
+  drainIntervalMs?: number;
+  onAggregatedDrain?: (batches: AggregatedTelemetry[]) => void | Promise<void>;
   now?: () => number;
   autoStart?: boolean;
   ring?: Partial<RingBufferOptions>;
@@ -137,10 +147,13 @@ export function samplingRate(
 
 export class TelemetryPipeline {
   readonly ring: RingBuffer<TelemetrySpan>;
+  readonly redactor: TelemetryRedactor;
   private networkClass: NetworkClass;
   private profile: NetworkProfile;
   private exporter: TelemetryExporter | null;
   private outbox: TelemetryOutbox | null;
+  private readonly drainIntervalMs?: number;
+  private readonly onAggregatedDrain?: (batches: AggregatedTelemetry[]) => void | Promise<void>;
   private readonly now: () => number;
 
   private sequence = 0;
@@ -166,10 +179,13 @@ export class TelemetryPipeline {
       capacity: options.capacity ?? 2_048,
       ...(options.ring || {}),
     });
+    this.redactor = options.redactor ?? new TelemetryRedactor();
     this.networkClass = options.networkClass ?? '4g';
     this.profile = profileFor(this.networkClass);
     this.exporter = options.exporter ?? null;
     this.outbox = options.outbox ?? null;
+    this.drainIntervalMs = options.drainIntervalMs;
+    this.onAggregatedDrain = options.onAggregatedDrain;
     this.now = options.now ?? (() => Date.now());
     if (options.autoStart) this.start();
   }
@@ -201,13 +217,27 @@ export class TelemetryPipeline {
       return false;
     }
 
+    const ts = input.ts ?? this.now();
+    const rawAttrs = input.attributes;
+    if (rawAttrs && hasPlaintextCoordinates(rawAttrs)) {
+      const lat = Number(rawAttrs.lat ?? rawAttrs.latitude ?? rawAttrs['dispatch.lat']);
+      const lng = Number(rawAttrs.lng ?? rawAttrs.longitude ?? rawAttrs.lon ?? rawAttrs['dispatch.lng']);
+      const gpsEvent: TelemetryEvent = {
+        type: input.kind ?? input.name,
+        timestamp: ts,
+        ...(Number.isFinite(lat) && Number.isFinite(lng) ? { location: { lat, lng } } : {}),
+        data: rawAttrs,
+      };
+      void this.redactor.redactEvent(gpsEvent);
+    }
+
     const span: TelemetrySpan = {
       name: input.name,
       priority,
       kind: input.kind ?? input.name,
-      ts: input.ts ?? this.now(),
+      ts,
       durationMs: input.durationMs,
-      attributes: input.attributes,
+      attributes: redactTelemetryAttributes(rawAttrs),
       seq: this.sequence++,
     };
 
@@ -251,7 +281,24 @@ export class TelemetryPipeline {
       return { status: 'empty', count: 0 };
     }
 
-    const spans = frames.map((frame) => frame.payload);
+    const rawSpans = frames.map((frame) => frame.payload);
+    const spans: TelemetrySpan[] = [];
+    let rejectedCount = 0;
+    for (const span of rawSpans) {
+      if (hasPlaintextCoordinates(span.attributes)) {
+        rejectedCount++;
+        continue;
+      }
+      spans.push(span);
+    }
+    if (rejectedCount > 0) {
+      this.parseErrors += rejectedCount;
+      this.lastError = 'plaintext coordinates rejected on flush';
+    }
+    if (spans.length === 0) {
+      this.flushing = false;
+      return { status: 'failed', count: 0, error: this.lastError ?? 'redaction bypass detected' };
+    }
     this.inFlight += spans.length;
     try {
       if (this.profile.outboxOnly || this.networkClass === 'offline') {
@@ -322,12 +369,16 @@ export class TelemetryPipeline {
     if (this.started) return;
     this.started = true;
     this.reschedule();
+    if (this.drainIntervalMs && this.drainIntervalMs > 0) {
+      this.redactor.startDrainTimer(this.drainIntervalMs, this.onAggregatedDrain);
+    }
   }
 
   stop(): void {
     this.started = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.redactor.stopDrainTimer();
   }
 
   snapshot(): TelemetrySnapshot {
@@ -509,7 +560,7 @@ export function toOtlpJson(spans: TelemetrySpan[], serviceName = 'helphone-web')
               attributes: [
                 { key: 'helphone.priority', value: { stringValue: span.priority } },
                 { key: 'helphone.kind', value: { stringValue: span.kind } },
-                ...Object.entries(span.attributes || {}).map(([key, value]) => ({
+                ...Object.entries(redactTelemetryAttributes(span.attributes) || {}).map(([key, value]) => ({
                   key,
                   value:
                     typeof value === 'number'
@@ -641,6 +692,110 @@ export function trackAudioAlert(
   } finally {
     span.end();
   }
+}
+
+export const MAX_LONGTASK_NAME_LENGTH = 64;
+export const MAX_LONGTASK_TELEMETRY_EVENTS = 50;
+
+export interface LongTaskTelemetryEvent {
+  name: string;
+  durationMs: number;
+  startTime: number;
+  endTime: number;
+  severity: 'warning' | 'critical';
+  warningThresholdMs: number;
+  criticalThresholdMs: number;
+  route?: string;
+}
+
+const longTaskTelemetryBuffer: LongTaskTelemetryEvent[] = [];
+
+/**
+ * Record a bounded long-task telemetry breach event (#961).
+ * Bounds string lengths and retains at most MAX_LONGTASK_TELEMETRY_EVENTS entries.
+ */
+export function trackLongTask(
+  input: {
+    name: string;
+    durationMs: number;
+    startTime: number;
+    endTime?: number;
+    severity: 'warning' | 'critical';
+    warningThresholdMs: number;
+    criticalThresholdMs: number;
+    route?: string;
+  },
+  pipeline?: TelemetryPipeline | null,
+): LongTaskTelemetryEvent {
+  const boundedName = String(input.name || 'longtask').slice(0, MAX_LONGTASK_NAME_LENGTH);
+  const durationMs = Number.isFinite(input.durationMs) ? Math.max(0, Math.round(input.durationMs * 100) / 100) : 0;
+  const startTime = Number.isFinite(input.startTime) ? Math.max(0, Math.round(input.startTime * 100) / 100) : 0;
+  const endTime = Number.isFinite(input.endTime)
+    ? Math.max(startTime, Math.round((input.endTime as number) * 100) / 100)
+    : Math.round((startTime + durationMs) * 100) / 100;
+  const boundedRoute = input.route ? String(input.route).slice(0, 64) : undefined;
+
+  const event: LongTaskTelemetryEvent = {
+    name: boundedName,
+    durationMs,
+    startTime,
+    endTime,
+    severity: input.severity,
+    warningThresholdMs: input.warningThresholdMs,
+    criticalThresholdMs: input.criticalThresholdMs,
+    ...(boundedRoute ? { route: boundedRoute } : {}),
+  };
+
+  if (input.severity === 'critical') {
+    longTaskTelemetryBuffer.push(event);
+    while (longTaskTelemetryBuffer.length > MAX_LONGTASK_TELEMETRY_EVENTS) {
+      longTaskTelemetryBuffer.shift();
+    }
+  }
+
+  const span = tracer.startSpan('longtask.breach');
+  try {
+    span.setAttributes({
+      'longtask.name': event.name,
+      'longtask.duration_ms': event.durationMs,
+      'longtask.severity': event.severity,
+      'longtask.warning_threshold_ms': event.warningThresholdMs,
+      'longtask.critical_threshold_ms': event.criticalThresholdMs,
+      ...(event.route ? { 'longtask.route': event.route } : {}),
+    });
+    if (event.severity === 'critical') {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'critical long task' });
+    }
+  } finally {
+    span.end();
+  }
+
+  if (pipeline) {
+    pipeline.record({
+      name: 'longtask.breach',
+      kind: 'longtask',
+      priority: event.severity === 'critical' ? 'critical' : 'normal',
+      ts: event.startTime,
+      durationMs: event.durationMs,
+      attributes: {
+        taskName: event.name,
+        severity: event.severity,
+        warningThresholdMs: event.warningThresholdMs,
+        criticalThresholdMs: event.criticalThresholdMs,
+        ...(event.route ? { route: event.route } : {}),
+      },
+    });
+  }
+
+  return event;
+}
+
+export function getLongTaskTelemetryEvents(): LongTaskTelemetryEvent[] {
+  return [...longTaskTelemetryBuffer];
+}
+
+export function clearLongTaskTelemetryEvents(): void {
+  longTaskTelemetryBuffer.length = 0;
 }
 
 /**

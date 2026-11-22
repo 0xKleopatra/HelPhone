@@ -74,6 +74,7 @@
     },
     "reputationGatedRanking": {
       "enabled": true,
+      "generation": 1,
       "rolloutPercentage": 100,
       "targets": {
         "environments": ["production", "staging", "development"]

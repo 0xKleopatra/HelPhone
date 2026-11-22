@@ -1,5 +1,6 @@
 import styles from "./Help.module.css";
 import { cx } from "../styles/cssModules";
+import { sanitizeText, SanitizedHtml } from "../lib/htmlSanitizer";
 import { useState, useEffect, useRef, Fragment, useCallback } from "react";
 // ── Field ops (ISP-131 rugged/SOS, ISP-134 NFC staging, ISP-135 radio) ──
 import RadioSheet from "../components/field/RadioSheet";
@@ -65,164 +66,14 @@ import {
 } from "../lib/crypto";
 import { redactProfile, jitterCoordinates } from "../lib/privacy.ts";
 import { api } from "../services/api";
+import {
+  DEFAULT_VIEWPORT_TRANSFORM,
+  buildViewportOverlays,
+  createOverlayRenderer,
+} from "../lib/offscreenCanvas.ts";
+import { useClusterer } from "../hooks/useClusterer.js";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
-
-export const LOG_RING_SIZE = 32;
-
-export const ZK_INITIAL = Object.freeze({
-  status: "idle",
-  logs: Object.freeze([]),
-  proof: null,
-  error: "",
-});
-
-export function sanitizeWalletAddress(raw) {
-  if (typeof raw !== "string") return "";
-  const addr = raw.trim();
-  if (!/^G[A-Z2-7]{55}$/.test(addr)) return "";
-  return addr;
-}
-
-export function createDebouncedSetter(setter, delay = 100) {
-  let latest = "";
-  let timer = null;
-
-  const debouncedSet = (value) => {
-    latest = value;
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      setter(latest);
-    }, delay);
-  };
-
-  const flush = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-      setter(latest);
-    }
-  };
-
-  const cancel = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-
-  return { debouncedSet, flush, cancel };
-}
-
-export function computeWalletStatus(address) {
-  const normalized = sanitizeWalletAddress(address);
-  if (!normalized) {
-    return { isConnected: false, displayAddress: "" };
-  }
-
-  return {
-    isConnected: true,
-    displayAddress: `${normalized.slice(0, 8)}...${normalized.slice(-6)}`,
-  };
-}
-
-export function zkReducer(state = ZK_INITIAL, action = {}) {
-  switch (action.type) {
-    case "RESET":
-      return { status: "idle", logs: [], proof: null, error: "" };
-
-    case "SET_STATUS": {
-      const status = action.payload;
-      if (status === state.status) return state;
-      return { ...state, status };
-    }
-
-    case "SET_ERROR": {
-      const error = action.payload ?? "";
-      if (error === state.error) return state;
-      return { ...state, error };
-    }
-
-    case "SET_PROOF": {
-      if (state.proof === action.payload) return state;
-      return { ...state, proof: action.payload ?? null };
-    }
-
-    case "PATCH_PROOF": {
-      if (!state.proof) return state;
-      const nextProof = { ...state.proof, ...(action.payload ?? {}) };
-      if (nextProof === state.proof) return state;
-      return { ...state, proof: nextProof };
-    }
-
-    case "PUSH_LOG": {
-      const payload = String(action.payload ?? "");
-      const previous = state.logs[state.logs.length - 1];
-      if (previous === payload) return state;
-
-      const nextLogs = [...state.logs, payload];
-      const trimmedLogs = nextLogs.length > LOG_RING_SIZE
-        ? nextLogs.slice(nextLogs.length - LOG_RING_SIZE)
-        : nextLogs;
-
-      return trimmedLogs === state.logs ? state : { ...state, logs: trimmedLogs };
-    }
-
-    default:
-      return state;
-  }
-}
-
-export function checkIsGetMode(mode) {
-  if (typeof mode !== "string") return false;
-  return mode.trim().toLowerCase() === "get";
-}
-
-export function getAccentColor(isGetMode) {
-  return isGetMode ? "#FF7A6B" : "#7357FF";
-}
-
-export function getStatusConfig(status) {
-  const key = typeof status === "string" ? status.trim() : "";
-  const map = {
-    Pending: { label: "WAITING FOR RESPONDER", color: "#a2a586" },
-    Enroute: { label: "RESPONDER ON THE WAY", color: "#7357FF" },
-    Resolved: { label: "RESOLVED", color: "#3F8487" },
-  };
-  return map[key] ?? { label: "UNKNOWN STATUS", color: "#a2a586" };
-}
-
-export function computeStep3Done(profile) {
-  if (!profile) return true;
-  return Boolean(profile.contact || profile.nickname);
-}
-
-export function computeUserCharacter(selected, profile) {
-  if (typeof selected === "string" && selected.trim()) {
-    return selected;
-  }
-
-  const pool = [
-    "runner",
-    "pacheco",
-    "growth",
-    "jumping-air",
-    "meela-pantalones",
-    "feliz",
-    "pondering",
-    "cube-leg",
-    "roboto",
-    "mechanical-love",
-    "looking-ahead",
-    "waiting",
-    "bueno",
-  ];
-
-  const seed = String(profile?.nickname ?? "helphone");
-  const index = Array.from(seed).reduce((sum, char) => sum + char.charCodeAt(0), 0) % pool.length;
-  return pool[index];
-}
 
 const MAP_STYLES = [
   {
@@ -1033,6 +884,7 @@ function TrackingScreen({
   isMarkingArrived,
   onMarkArrived,
   onResolve,
+  overlayActive = false,
 }) {
   const dist =
     requesterLat != null && responderLat != null
@@ -1052,7 +904,7 @@ function TrackingScreen({
           lat={responderLat}
           lng={responderLng}
         >
-          {!isArrived && (
+          {!isArrived && !overlayActive && (
             <div
               style={{
                 position: "absolute",
@@ -1501,6 +1353,17 @@ export function sanitizeWalletAddress(raw) {
   return addr;
 }
 
+export function computeStep3Done(profile) {
+  if (!profile) return true;
+  return Boolean(profile.nickname || profile.contact || true);
+}
+
+export function computeUserCharacter(selectedChar, profile) {
+  if (selectedChar) return selectedChar;
+  const nickname = profile?.nickname || "me";
+  return pickChar("default", nickname);
+}
+
 const PHONE_REGEX = /^\+?[1-9]\d{1,14}$/;
 const TELEGRAM_REGEX = /^@[A-Za-z0-9_]{5,32}$/;
 const CONTACT_ALLOWLIST = [PHONE_REGEX, TELEGRAM_REGEX];
@@ -1517,17 +1380,6 @@ export function validateContact(value) {
     };
   }
   return { valid: true, error: "" };
-}
-
-export function computeStep3Done(profile) {
-  if (!profile) return true;
-  return Boolean(profile.nickname || profile.contact || true);
-}
-
-export function computeUserCharacter(selectedChar, profile) {
-  if (selectedChar) return selectedChar;
-  const nickname = profile?.nickname || "me";
-  return pickChar("default", nickname);
 }
 
 export const STATUS_CONFIG = {
@@ -1732,6 +1584,103 @@ export default function Help() {
   const [zkLogs, setZkLogs] = useState([]);
   const [zkProof, setZkProof] = useState(null);
   const [zkError, setZkError] = useState("");
+  const [mapViewport, setMapViewport] = useState(DEFAULT_VIEWPORT_TRANSFORM);
+  const [overlayMountKey, setOverlayMountKey] = useState(0);
+  const [overlayForceMain, setOverlayForceMain] = useState(false);
+  const overlayCanvasRef = useRef(null);
+  const overlayRendererRef = useRef(null);
+  const overlayRendererCanvasRef = useRef(null);
+
+  const clusterPoints = [
+    ...(location && Number.isFinite(location[0]) && Number.isFinite(location[1])
+      ? [
+          {
+            id: "self",
+            lat: location[0],
+            lng: location[1],
+            kind: mode === "get" ? "pending" : "responder",
+          },
+        ]
+      : []),
+    ...responders
+      .filter((r) => r && Number.isFinite(r.lat) && Number.isFinite(r.lng))
+      .map((r) => ({
+        id: `resp-${r.id}`,
+        lat: r.lat,
+        lng: r.lng,
+        kind: responderArrived ? "resolved" : "enroute",
+      })),
+    ...openRequests
+      .filter((req) => req && Number.isFinite(req.lat) && Number.isFinite(req.lng))
+      .map((req) => ({
+        id: `req-${req.id}`,
+        lat: req.lat,
+        lng: req.lng,
+        kind: "pending",
+      })),
+  ];
+
+  const { clusters: mapClusters } = useClusterer(
+    clusterPoints,
+    mapViewport.zoom ?? 2,
+    mapViewport.bounds ?? DEFAULT_VIEWPORT_TRANSFORM.bounds,
+    {
+      scale: mapViewport.scale,
+      offsetX: mapViewport.offsetX,
+      offsetY: mapViewport.offsetY,
+    },
+  );
+
+  const helpOverlays = buildViewportOverlays({
+    points: clusterPoints,
+    clusters: mapClusters,
+    size: { width: 1140, height: 540 },
+    transform: mapViewport,
+  });
+  const hasHelpOverlays = helpOverlays.length > 0;
+
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!hasHelpOverlays || !canvas) return undefined;
+    let renderer = overlayRendererRef.current;
+    if (overlayRendererCanvasRef.current !== canvas) {
+      if (renderer) renderer.destroy();
+      overlayRendererRef.current = null;
+      overlayRendererCanvasRef.current = null;
+      try {
+        renderer = createOverlayRenderer(canvas, {
+          width: 1140,
+          height: 540,
+          dpr: Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2),
+          forceMainThread: overlayForceMain,
+          onError: () => {
+            setOverlayForceMain(true);
+            setOverlayMountKey((k) => k + 1);
+          },
+        });
+      } catch {
+        if (!overlayForceMain) {
+          setOverlayForceMain(true);
+          setOverlayMountKey((k) => k + 1);
+        }
+        return undefined;
+      }
+      overlayRendererRef.current = renderer;
+      overlayRendererCanvasRef.current = canvas;
+    }
+    return () => {
+      if (overlayRendererRef.current === renderer && renderer) {
+        renderer.destroy();
+        overlayRendererRef.current = null;
+        overlayRendererCanvasRef.current = null;
+      }
+    };
+  }, [hasHelpOverlays, overlayMountKey, overlayForceMain]);
+
+  useEffect(() => {
+    overlayRendererRef.current?.setOverlays(helpOverlays);
+    overlayRendererRef.current?.setViewport?.(mapViewport);
+  }, [helpOverlays, mapViewport, overlayMountKey, overlayForceMain]);
 
   const [walletAddress, setWalletAddress] = useState("");
   const activeWalletAddress = walletAddress;
@@ -3818,7 +3767,7 @@ export default function Help() {
                           color: "#F4ECDC",
                         }}
                       >
-                        {selectedRequest.nickname || "Anonymous"}
+                        {sanitizeText(selectedRequest.nickname) || "Anonymous"}
                       </div>
                       {(() => {
                         const et = EMERGENCY_TYPES.find(
@@ -3842,7 +3791,7 @@ export default function Help() {
                           color: "rgba(242,236,220,0.4)",
                         }}
                       >
-                        {selectedRequest.contact || ""}
+                        {sanitizeText(selectedRequest.contact) || ""}
                       </div>
                     </div>
                     <button
@@ -3985,7 +3934,7 @@ export default function Help() {
                               color: "#F4ECDC",
                             }}
                           >
-                            {req.nickname || "Anonymous"}
+                            {sanitizeText(req.nickname) || "Anonymous"}
                           </div>
                           {(() => {
                             const et = EMERGENCY_TYPES.find(
@@ -4238,6 +4187,19 @@ export default function Help() {
               setLocation([e.lngLat.lat, e.lngLat.lng]);
             }
           }}
+          onMove={(e) => {
+            const vs = e?.viewState;
+            if (!vs) return;
+            const z = Number.isFinite(vs.zoom) ? vs.zoom : 2;
+            const scale = Math.pow(2, Math.max(-4, Math.min(4, (z - 2) * 0.25)));
+            setMapViewport((prev) => ({
+              ...prev,
+              zoom: z,
+              scale,
+              offsetX: Number.isFinite(vs.longitude) ? -vs.longitude * 2 : 0,
+              offsetY: Number.isFinite(vs.latitude) ? vs.latitude * 2 : 0,
+            }));
+          }}
         >
           {location && <MapController center={location} zoom={14} />}
           <NavigationControl position="bottom-right" />
@@ -4263,7 +4225,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -4294,7 +4256,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -4365,7 +4327,7 @@ export default function Help() {
                     closeButton={false}
                   >
                     <strong style={{ color: "#FF7A6B" }}>
-                      {req.nickname || "Anonymous"}
+                      {sanitizeText(req.nickname) || "Anonymous"}
                     </strong>
                     <br />
                     <span style={{ fontSize: "11px", color: "#a2a586" }}>
@@ -4388,6 +4350,7 @@ export default function Help() {
               etaSeconds={responders[0].eta_seconds}
               isArrived={responderArrived}
               isResponderView={false}
+              overlayActive={hasHelpOverlays}
               onResolve={async () => {
                 try {
                   await resolveRequest(
@@ -4421,9 +4384,25 @@ export default function Help() {
                 isResponderView={true}
                 isMarkingArrived={arrivalSubmitting}
                 onMarkArrived={handleMarkArrived}
+                overlayActive={hasHelpOverlays}
               />
             )}
         </Map>
+        {hasHelpOverlays && (
+          <canvas
+            key={overlayMountKey}
+            ref={overlayCanvasRef}
+            aria-hidden="true"
+            data-testid="help-map-overlay-canvas"
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              pointerEvents: "none",
+            }}
+          />
+        )}
 
         <div
           ref={styleSelectorRef}
@@ -4685,7 +4664,7 @@ export default function Help() {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {profile.nickname || "Anonymous"}
+                      {sanitizeText(profile.nickname) || "Anonymous"}
                     </div>
                     <div
                       style={{

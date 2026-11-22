@@ -24,8 +24,10 @@ import {
 import { createPasskeyAuthRouter } from './routes/passkey-auth.js'
 import { createFederationRouter } from './routes/federation.js'
 import { createDispatchRouters } from './routes/dispatch.js'
+import { createDispatchPriorityMiddleware } from './middleware/dispatchPriority.js'
 import { syncRouter } from './routes/sync.js'
 import historyRouter from './routes/history.js'
+import { createDocsRouter } from './routes/docs.js'
 
 /* Cross-Origin-Opener-Policy: same-origin */
 /* Cross-Origin-Embedder-Policy: credentialless */
@@ -71,12 +73,14 @@ app.use(
 )
 if (process.env.NODE_ENV !== 'test') app.use(generalLimiter)
 app.use('/api/auth/passkey', createPasskeyAuthRouter())
+app.use(createDispatchPriorityMiddleware())
 const dispatchRouters = createDispatchRouters()
 app.use('/api/dispatch', dispatchRouters.api)
 app.use('/metrics', dispatchRouters.metrics)
 app.use('/api/sync', syncRouter)
 app.use('/api/history', historyRouter)
 app.use('/api/federation', createFederationRouter())
+app.use('/docs', createDocsRouter())
 
 const stateExporter = new SorobanStateExporter()
 

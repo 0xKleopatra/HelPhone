@@ -19,19 +19,35 @@
 //    If you legitimately need dynamic code, use a WebWorker sandbox
 //    (see src/lib/workerSandbox.ts).
 //
+//  no-restricted-syntax: error — Forbids raw dangerouslySetInnerHTML and direct
+//    innerHTML assignments. Rendered HTML must go through sanitizeHtml() in
+//    src/lib/htmlSanitizer.ts.
+//
 // Adding a new rule? Leave a comment explaining the 'why' so the next
 // maintainer doesn't silently revert it.
 
 import js from '@eslint/js'
+import babelParser from '@babel/eslint-parser'
 
 export default [
+  {
+    ignores: ['dist/**', 'node_modules/**', 'public/**', 'artifacts/**', '**/*.d.ts'],
+  },
   js.configs.recommended,
   {
     files: ['**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
+      parser: babelParser,
       parserOptions: {
+        requireConfigFile: false,
+        babelOptions: {
+          presets: [
+            ['@babel/preset-typescript', { allowNamespaces: true, isTSX: true, allExtensions: true }],
+            ['@babel/preset-react', { runtime: 'automatic' }],
+          ],
+        },
         ecmaFeatures: {
           jsx: true,
         },
@@ -73,6 +89,64 @@ export default [
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-new-func': 'error',
+
+      // ── XSS prevention rule ───────────────────────────────────────────────
+      // Raw dangerouslySetInnerHTML and direct innerHTML assignments are banned.
+      // All rendered HTML content must pass through sanitizeHtml() in
+      // src/lib/htmlSanitizer.ts.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message:
+            'Raw dangerouslySetInnerHTML is forbidden. Route HTML through sanitizeHtml() in src/lib/htmlSanitizer.ts.',
+        },
+        {
+          selector: "AssignmentExpression[left.property.name='innerHTML']",
+          message:
+            'Direct innerHTML assignment is forbidden. Route HTML through sanitizeHtml() in src/lib/htmlSanitizer.ts.',
+        },
+        // ── Feature flag provenance rule (#943) ─────────────────────────────
+        // Ad-hoc reads of flag storage or VITE_FLAG_* bypass the unified
+        // resolver and break incident-bundle provenance.
+        {
+          selector:
+            "CallExpression[callee.object.name='localStorage'][callee.property.name='getItem'][arguments.0.value=/^(hp_feature_flags|helphone\\.flags|hp_flag_)/]",
+          message:
+            'Ad-hoc localStorage flag reads are forbidden. Use resolveUnifiedFlag() / isFlagEnabled() in src/lib/featureFlags.ts or src/lib/field/flags.js.',
+        },
+        {
+          selector: "MemberExpression[object.property.name='env'][property.name=/^VITE_FLAG_/]",
+          message:
+            'Ad-hoc VITE_FLAG_* reads are forbidden. Route through resolveUnifiedFlag() / useFeatureFlag().',
+        },
+      ],
+    },
+  },
+  {
+    // Single source of truth exemption: htmlSanitizer encapsulates the sanitizer boundary.
+    files: ['src/lib/htmlSanitizer.ts', 'src/lib/htmlSanitizer.tsx'],
+    rules: {
+      'no-restricted-syntax': 'off',
+    },
+  },
+  {
+    // Flag resolver boundary exemption: featureFlags and field/flags encapsulate raw flag stores.
+    files: ['src/lib/featureFlags.ts', 'src/lib/field/flags.js'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message:
+            'Raw dangerouslySetInnerHTML is forbidden. Route HTML through sanitizeHtml() in src/lib/htmlSanitizer.ts.',
+        },
+        {
+          selector: "AssignmentExpression[left.property.name='innerHTML']",
+          message:
+            'Direct innerHTML assignment is forbidden. Route HTML through sanitizeHtml() in src/lib/htmlSanitizer.ts.',
+        },
+      ],
     },
   },
 ]
