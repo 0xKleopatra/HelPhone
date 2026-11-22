@@ -22,6 +22,8 @@ import type { MetricFamily } from '../middleware/metrics.ts'
 import { getDomainStore, type DomainStore } from '../lib/domainStore.ts'
 import { getSqlCache, invalidateIncident } from '../lib/sqlCache.ts'
 import { DispatchQueue, toQueuePriority, type QueueMetrics } from '../../src/lib/dispatchQueue.ts'
+import { buildOpenTodaySlice } from '../lib/openTodaySlice.ts'
+import { haversineKm } from '../lib/geo.ts'
 
 // ── Zod Schemas for Incident REST surface ───────────────────────────────────
 
@@ -46,6 +48,17 @@ const assignSchema = z.object({
 
 const ackSchema = z.object({
   expectedVersion: z.number().int().positive().optional(),
+})
+
+// Hardware SOS intake (#941). The key is the client's 10 s bucket: sos-<bucket>.
+const SOS_KEY_RE = /^sos-(\d{1,15})$/
+/** Auto-dispatch (no operator confirm) only within this radius of an unresolved incident. */
+const SOS_AUTO_DISPATCH_KM = 0.5
+const sosIntakeSchema = z.object({
+  idempotencyKey: z.string().regex(SOS_KEY_RE),
+  source: z.string().max(32).optional(),
+  force: z.boolean().default(false),
+  location: locationSchema.optional(),
 })
 
 function issuesOf(error: z.ZodError) {
@@ -337,13 +350,12 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
   const api = Router()
 
   // ── Actionable slice for rapid join (<20s, <1MB) ─────────────────────
-  api.get('/open-today', (_req: Request, res: Response) => {
-    const active = [
-      { id: 'disp-today-1', status: 'open', geohash: 'u4pruydqqvj', team: 'alpha', server_received_at: new Date().toISOString() },
-      { id: 'disp-today-2', status: 'assigned', geohash: 'u4pruydqqvk', team: 'bravo', server_received_at: new Date().toISOString() },
-    ]
-    res.json(active)
-  })
+  // Unresolved incidents from the domain store, bounded by OPEN_TODAY_LIMIT and
+  // OPEN_TODAY_MAX_BYTES. Served as a plain array; crdtSync.js depends on that shape.
+  const sendOpenToday = (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store').json(buildOpenTodaySlice(domainStore))
+  }
+  api.get('/open-today', sendOpenToday)
 
   // ── Responder key registry (public keys only) ──────────────────────
   api.post('/keys', async (req: Request, res: Response) => {
@@ -538,13 +550,61 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
 
   // ── Domain Incidents REST API ───────────────────────────────────────────
 
+  // ── Hardware SOS intake (#941) ──────────────────────────────────────
+  // Server-wide idempotency: every device that presses inside one 10 s bucket
+  // maps to the same incident id, and createIncident refuses a duplicate id, so
+  // two rugged devices cannot open two incidents for one press. Without operator
+  // confirm (force), the SOS is only accepted near an unresolved incident; anywhere
+  // else it is declined with 202 needs_confirm and no incident is created.
+  api.post('/sos', (req: Request, res: Response) => {
+    if (!enabled) {
+      res.status(503).json({ success: false, error: 'Encrypted dispatch is disabled.' })
+      return
+    }
+    const parsed = sosIntakeSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return validationResponse(res, issuesOf(parsed.error))
+    }
+    const { idempotencyKey, force, location } = parsed.data
+    const bucket = SOS_KEY_RE.exec(idempotencyKey)?.[1] ?? ''
+    const incidentId = `SOS-${bucket}`
+
+    const existing = domainStore.getIncident(incidentId)
+    if (existing) {
+      return res.status(200).json({ status: 'duplicate', incident: existing })
+    }
+
+    if (location === undefined) {
+      if (!force) {
+        return res.status(202).json({ status: 'needs_confirm', idempotencyKey })
+      }
+      return validationResponse(res, [{ path: 'location', message: 'required to open an incident' }])
+    }
+
+    if (!force) {
+      const nearActive = domainStore
+        .listActiveIncidents(500)
+        .some((incident) => haversineKm(location, incident.location) <= SOS_AUTO_DISPATCH_KM)
+      if (!nearActive) {
+        return res.status(202).json({ status: 'needs_confirm', idempotencyKey })
+      }
+    }
+
+    try {
+      const incident = domainStore.createIncident({ id: incidentId, status: 'open', priority: 'critical', location })
+      invalidateIncident(incident.id)
+      return res.status(201).json({ status: 'created', incident })
+    } catch (error) {
+      if ((error as { code?: string }).code === 'conflict') {
+        return res.status(200).json({ status: 'duplicate', incident: domainStore.getIncident(incidentId) })
+      }
+      return res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   api.get('/', (req: Request, res: Response) => {
     if (req.query.slice === 'open-today') {
-      const active = [
-        { id: 'disp-today-1', status: 'open', geohash: 'u4pruydqqvj', team: 'alpha', server_received_at: new Date().toISOString() },
-        { id: 'disp-today-2', status: 'assigned', geohash: 'u4pruydqqvk', team: 'bravo', server_received_at: new Date().toISOString() },
-      ]
-      return res.json(active)
+      return sendOpenToday(req, res)
     }
 
     if (req.query.limit || req.query.cursor) {
