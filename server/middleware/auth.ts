@@ -7,7 +7,7 @@ import {
 } from '../lib/session-store.js'
 
 export type AuthenticatedUser =
-  | { id: string; username?: string; algorithm: 'webauthn'; sessionId?: string }
+  | { id: string; username?: string; algorithm: 'webauthn'; sessionId?: string; uv?: boolean }
   | { publicKey: string; algorithm: string; timestamp: number }
 
 export type AuthResult =
@@ -52,7 +52,15 @@ export async function verifyBearerSession(token: string): Promise<AuthResult> {
   const renewal = claims.jti ? await renewSessionIfNeeded(token, claims) : null
   return {
     ok: true,
-    user: { id: claims.sub, username: claims.username, algorithm: 'webauthn', sessionId: claims.jti },
+    // #924: fail closed. Only an explicit uv=true claim counts as user-verified;
+    // a legacy token or a missing claim is treated as UV-less.
+    user: {
+      id: claims.sub,
+      username: claims.username,
+      algorithm: 'webauthn',
+      sessionId: claims.jti,
+      uv: claims.uv === true,
+    },
     renewalToken: renewal?.token,
   }
 }

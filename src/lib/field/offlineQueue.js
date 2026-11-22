@@ -10,6 +10,7 @@
 
 import { PII_FIELDS } from "../radio/bandPlan.js";
 import { deriveKey, deriveStorageKey, PBKDF2_SALT_BYTES } from "../pbkdf2Key";
+import { admitClaim } from "../sessionGenerations";
 
 const STORAGE_KEY = "hp_offline_queue";
 const SALT_STORAGE_KEY = "hp_offline_queue_salt";
@@ -382,9 +383,17 @@ function nextSeq(state) {
 /**
  * Enqueue an intent. Enforces PII redaction at the API boundary, deduplicates
  * by idempotencyKey, and enforces bounded retention.
- * @returns {{entry: object, duplicate: boolean, redactedFields: string[]}}
+ * `session` (optional, #923): the SessionIdentity creating this intent. When
+ * given, the write is refused unless that identity is the live generation, so
+ * a revoked generation cannot accept new claims. Callers without a session
+ * keep the previous behaviour.
+ * @returns {{entry: object, duplicate: boolean, redactedFields: string[], refused?: string}}
  */
-export function enqueue({ kind, prio = PRIO.NEW, idempotencyKey, data = {}, now = Date.now() }) {
+export function enqueue({ kind, prio = PRIO.NEW, idempotencyKey, data = {}, now = Date.now(), session = null }) {
+  if (session) {
+    const gate = admitClaim(session);
+    if (!gate.ok) return { entry: null, duplicate: false, refused: gate.error, redactedFields: [] };
+  }
   const state = load();
   enforceRetention(state, { now });
 

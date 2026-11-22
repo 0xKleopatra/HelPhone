@@ -16,6 +16,7 @@ import {
 } from '@stellar/stellar-sdk'
 import { SorobanStateExporter, loadLatestSnapshot } from './indexer/exporter.js'
 import { authMiddleware } from './middleware/auth.js'
+import { requireUvTier } from './middleware/uvTier.js'
 import { createCspMiddleware, createHtmlHandler } from './middleware/csp.js'
 import {
   createHttp2PushMiddleware,
@@ -116,7 +117,8 @@ app.get('/api/state/snapshots/latest', (_req: Request, res: Response) => {
 })
 
 // Secure Authenticated Endpoint Example using Cryptographic Auth Middleware
-app.post('/api/protected/action', authMiddleware, (req: Request, res: Response) => {
+// #924 / ADR-026: a sensitive action needs a UV-verified passkey session.
+app.post('/api/protected/action', authMiddleware, requireUvTier, (req: Request, res: Response) => {
   res.json({ success: true, message: 'Authenticated payload verified successfully', user: (req as any).authenticatedUser })
 })
 
