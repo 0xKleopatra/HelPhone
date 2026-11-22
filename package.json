@@ -93,6 +93,7 @@
     "test:e2e": "playwright test",
     "test:e2e:a11y": "playwright test tests/e2e/a11y.spec.ts",
     "spike:crdt": "node --expose-gc --max-old-space-size=3072 scripts/spikes/crdt_memory_profile.js --heap-snapshots --out docs/spikes/results/crdt-memory-profile.json",
+    "spike:crdt-budget": "node --expose-gc --max-old-space-size=512 scripts/spikes/crdt_hydration_budget.js --ops 15000 --budget-mb 250 --tta-ms 20000",
     "spike:zk:build": "bash circuits/recursive_verifier/build.sh 1 && bash circuits/recursive_verifier/build.sh 2 && bash circuits/recursive_verifier/build.sh 5",
     "spike:zk": "node scripts/spikes/zk_aggregation_benchmark.js --out docs/spikes/results/zk-aggregation.json",
     "spike:routing": "node --expose-gc --max-old-space-size=3072 scripts/spikes/routing_benchmark.js --out docs/spikes/results/routing-benchmark.json",
