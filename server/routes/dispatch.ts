@@ -21,6 +21,9 @@ import { PROMETHEUS_CONTENT_TYPE, renderPrometheus } from '../middleware/metrics
 import type { MetricFamily } from '../middleware/metrics.ts'
 import { getDomainStore, type DomainStore } from '../lib/domainStore.ts'
 import { getSqlCache, invalidateIncident } from '../lib/sqlCache.ts'
+import { DispatchQueue, toQueuePriority, type QueueMetrics } from '../../src/lib/dispatchQueue.ts'
+import { buildOpenTodaySlice } from '../lib/openTodaySlice.ts'
+import { haversineKm } from '../lib/geo.ts'
 
 // ── Zod Schemas for Incident REST surface ───────────────────────────────────
 
@@ -45,6 +48,17 @@ const assignSchema = z.object({
 
 const ackSchema = z.object({
   expectedVersion: z.number().int().positive().optional(),
+})
+
+// Hardware SOS intake (#941). The key is the client's 10 s bucket: sos-<bucket>.
+const SOS_KEY_RE = /^sos-(\d{1,15})$/
+/** Auto-dispatch (no operator confirm) only within this radius of an unresolved incident. */
+const SOS_AUTO_DISPATCH_KM = 0.5
+const sosIntakeSchema = z.object({
+  idempotencyKey: z.string().regex(SOS_KEY_RE),
+  source: z.string().max(32).optional(),
+  force: z.boolean().default(false),
+  location: locationSchema.optional(),
 })
 
 function issuesOf(error: z.ZodError) {
@@ -158,6 +172,8 @@ export interface DispatchRouterOptions {
   store?: DispatchStore | DomainStore
   domainStore?: DomainStore
   enabled?: boolean
+  queue?: DispatchQueue
+  tickIntervalMs?: number
 }
 
 const FORBIDDEN_BODY_KEYS = new Set([
@@ -207,17 +223,19 @@ export interface DispatchMetricOptions {
   writes: number
   reads: number
   rateLimited: number
+  queueMetrics?: QueueMetrics
 }
 
 export function dispatchMetricFamilies(opts: DispatchMetricOptions): MetricFamily[] {
   const s = opts.store.stats()
+  const qm = opts.queueMetrics
   const sample = (name: string, help: string, value: number) => ({
     name,
     help,
     type: 'counter' as const,
     samples: [{ labels: {}, value }],
   })
-  return [
+  const families: MetricFamily[] = [
     {
       name: 'helphone_dispatch_envelopes',
       help: 'Sealed emergency payload envelopes currently held by the relay.',
@@ -258,6 +276,34 @@ export function dispatchMetricFamilies(opts: DispatchMetricOptions): MetricFamil
       opts.rateLimited,
     ),
   ]
+  if (qm) {
+    families.push(
+      {
+        name: 'helphone_dispatch_queue_queued',
+        help: 'Current number of queued dispatch items.',
+        type: 'gauge',
+        samples: [{ labels: {}, value: qm.queued }],
+      },
+      {
+        name: 'helphone_dispatch_queue_critical',
+        help: 'Current number of queued P0 (critical) dispatch items.',
+        type: 'gauge',
+        samples: [{ labels: {}, value: qm.critical }],
+      },
+      {
+        name: 'helphone_dispatch_queue_max_wait_ms',
+        help: 'Maximum wait time (ms) among queued dispatch items.',
+        type: 'gauge',
+        samples: [{ labels: {}, value: qm.maxWaitTime }],
+      },
+      sample(
+        'helphone_dispatch_queue_stale_prevented_total',
+        'Count of stale updates skipped to prevent starving P0 requests.',
+        qm.stalePrevented,
+      ),
+    )
+  }
+  return families
 }
 
 export function createWriteLimiter(limit: number, windowMs: number) {
@@ -285,19 +331,31 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
 
   const enabled = opts.enabled ?? true
   const limiter = createWriteLimiter(WRITE_RATE_LIMIT, WRITE_RATE_WINDOW_MS)
+  const queue = opts.queue ?? new DispatchQueue()
+
+  queue.onProcess(async (item) => {
+    const data = item.payload as { requestId?: string; envelope?: EncryptedEnvelope } | undefined
+    if (data?.requestId && data?.envelope) {
+      store.putEnvelope(data.requestId, data.envelope)
+    }
+  })
+  if (opts.tickIntervalMs && opts.tickIntervalMs > 0) {
+    queue.startTick(opts.tickIntervalMs)
+  } else if (process.env.NODE_ENV !== 'test') {
+    queue.startTick(100)
+  }
 
   const counters = { rejectedPlaintext: 0, rejectedMalformed: 0, writes: 0, reads: 0, rateLimited: 0 }
 
   const api = Router()
 
   // ── Actionable slice for rapid join (<20s, <1MB) ─────────────────────
-  api.get('/open-today', (_req: Request, res: Response) => {
-    const active = [
-      { id: 'disp-today-1', status: 'open', geohash: 'u4pruydqqvj', team: 'alpha', server_received_at: new Date().toISOString() },
-      { id: 'disp-today-2', status: 'assigned', geohash: 'u4pruydqqvk', team: 'bravo', server_received_at: new Date().toISOString() },
-    ]
-    res.json(active)
-  })
+  // Unresolved incidents from the domain store, bounded by OPEN_TODAY_LIMIT and
+  // OPEN_TODAY_MAX_BYTES. Served as a plain array; crdtSync.js depends on that shape.
+  const sendOpenToday = (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store').json(buildOpenTodaySlice(domainStore))
+  }
+  api.get('/open-today', sendOpenToday)
 
   // ── Responder key registry (public keys only) ──────────────────────
   api.post('/keys', async (req: Request, res: Response) => {
@@ -406,6 +464,16 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
       return
     }
 
+    const priority = req.priorityContext?.priority ?? toQueuePriority(req.headers['x-priority']?.toString())
+    queue.enqueue({
+      id: `envelope:${requestId}:${Date.now()}`,
+      priority,
+      payload: { requestId, envelope },
+      timestamp: req.priorityContext?.timestamp ?? Date.now(),
+      maxRetries: 3,
+      isUpdate: req.priorityContext?.isUpdate ?? false,
+    })
+
     const outcome = store.putEnvelope(requestId, envelope)
     if (!outcome.stored) {
       res.status(409).json({ success: false, error: outcome.reason ?? 'rejected' })
@@ -482,13 +550,61 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
 
   // ── Domain Incidents REST API ───────────────────────────────────────────
 
+  // ── Hardware SOS intake (#941) ──────────────────────────────────────
+  // Server-wide idempotency: every device that presses inside one 10 s bucket
+  // maps to the same incident id, and createIncident refuses a duplicate id, so
+  // two rugged devices cannot open two incidents for one press. Without operator
+  // confirm (force), the SOS is only accepted near an unresolved incident; anywhere
+  // else it is declined with 202 needs_confirm and no incident is created.
+  api.post('/sos', (req: Request, res: Response) => {
+    if (!enabled) {
+      res.status(503).json({ success: false, error: 'Encrypted dispatch is disabled.' })
+      return
+    }
+    const parsed = sosIntakeSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return validationResponse(res, issuesOf(parsed.error))
+    }
+    const { idempotencyKey, force, location } = parsed.data
+    const bucket = SOS_KEY_RE.exec(idempotencyKey)?.[1] ?? ''
+    const incidentId = `SOS-${bucket}`
+
+    const existing = domainStore.getIncident(incidentId)
+    if (existing) {
+      return res.status(200).json({ status: 'duplicate', incident: existing })
+    }
+
+    if (location === undefined) {
+      if (!force) {
+        return res.status(202).json({ status: 'needs_confirm', idempotencyKey })
+      }
+      return validationResponse(res, [{ path: 'location', message: 'required to open an incident' }])
+    }
+
+    if (!force) {
+      const nearActive = domainStore
+        .listActiveIncidents(500)
+        .some((incident) => haversineKm(location, incident.location) <= SOS_AUTO_DISPATCH_KM)
+      if (!nearActive) {
+        return res.status(202).json({ status: 'needs_confirm', idempotencyKey })
+      }
+    }
+
+    try {
+      const incident = domainStore.createIncident({ id: incidentId, status: 'open', priority: 'critical', location })
+      invalidateIncident(incident.id)
+      return res.status(201).json({ status: 'created', incident })
+    } catch (error) {
+      if ((error as { code?: string }).code === 'conflict') {
+        return res.status(200).json({ status: 'duplicate', incident: domainStore.getIncident(incidentId) })
+      }
+      return res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
   api.get('/', (req: Request, res: Response) => {
     if (req.query.slice === 'open-today') {
-      const active = [
-        { id: 'disp-today-1', status: 'open', geohash: 'u4pruydqqvj', team: 'alpha', server_received_at: new Date().toISOString() },
-        { id: 'disp-today-2', status: 'assigned', geohash: 'u4pruydqqvk', team: 'bravo', server_received_at: new Date().toISOString() },
-      ]
-      return res.json(active)
+      return sendOpenToday(req, res)
     }
 
     if (req.query.limit || req.query.cursor) {
@@ -636,14 +752,18 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
     }
   })
 
+  api.get('/queue/metrics', (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store').json(queue.getMetrics())
+  })
+
   const metrics = Router()
   metrics.get('/dispatch', (_req: Request, res: Response) => {
     res
       .set('Content-Type', PROMETHEUS_CONTENT_TYPE)
-      .send(renderPrometheus(dispatchMetricFamilies({ store, ...counters })))
+      .send(renderPrometheus(dispatchMetricFamilies({ store, ...counters, queueMetrics: queue.getMetrics() })))
   })
 
-  return { api, metrics, store, limiter }
+  return { api, metrics, store, limiter, queue }
 }
 
 export function createDispatchRouter(options: DispatchRouterOptions = {}): Router {

@@ -3,12 +3,9 @@ import { createDispatchRouter } from './dispatch.ts';
 import { createEventsRouter } from './events.ts';
 import { createSyncRouter } from './sync.ts';
 import { createDocsRouter } from './docs.ts';
+import { createRadioGatewayRouter } from './radioGateway.ts';
 import { installGraphQLRoutes } from '../graphql/server.ts';
-import type { DomainStore } from '../lib/domainStore.ts';
-import {
-  apiVersionMiddleware,
-  graphqlCompatibilityMiddleware,
-} from '../middleware/apiVersion.ts';
+import { getDomainStore, type DomainStore } from '../lib/domainStore.ts';
 
 export interface DomainRoutesOptions {
   store?: DomainStore;
@@ -31,20 +28,10 @@ export function installDomainRoutes(app: Express, options: DomainRoutesOptions =
   if (installed.has(app)) return false;
   installed.add(app);
 
-  const dispatchRouter = createDispatchRouter({ store: options.store });
-  const eventsRouter = createEventsRouter({ store: options.store });
-  const syncRouter = createSyncRouter({ store: options.store });
-
-  // Versioned v1 surface
-  app.use('/api/v1/dispatch', apiVersionMiddleware('v1'), dispatchRouter);
-  app.use('/api/v1/events', apiVersionMiddleware('v1'), eventsRouter);
-  app.use('/api/v1/sync', apiVersionMiddleware('v1'), syncRouter);
-
-  // Legacy unversioned (v0) surface with Deprecation + Sunset headers
-  app.use('/api/dispatch', apiVersionMiddleware('v0'), dispatchRouter);
-  app.use('/api/events', apiVersionMiddleware('v0'), eventsRouter);
-  app.use('/api/sync', apiVersionMiddleware('v0'), syncRouter);
-
+  app.use('/api/dispatch', createDispatchRouter({ store: options.store }));
+  app.use('/api/events', createEventsRouter({ store: options.store }));
+  app.use('/api/sync', createSyncRouter({ store: options.store }));
+  app.use('/api/radio', createRadioGatewayRouter({ store: options.store ?? getDomainStore() }));
   app.use('/docs', createDocsRouter());
 
   const graphqlPath = options.graphqlPath ?? '/graphql';

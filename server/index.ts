@@ -16,6 +16,7 @@ import {
 } from '@stellar/stellar-sdk'
 import { SorobanStateExporter, loadLatestSnapshot } from './indexer/exporter.js'
 import { authMiddleware } from './middleware/auth.js'
+import { requireUvTier } from './middleware/uvTier.js'
 import { createCspMiddleware, createHtmlHandler } from './middleware/csp.js'
 import {
   createHttp2PushMiddleware,
@@ -24,6 +25,7 @@ import {
 import { createPasskeyAuthRouter } from './routes/passkey-auth.js'
 import { createFederationRouter } from './routes/federation.js'
 import { createDispatchRouters } from './routes/dispatch.js'
+import { createDispatchPriorityMiddleware } from './middleware/dispatchPriority.js'
 import { syncRouter } from './routes/sync.js'
 import historyRouter from './routes/history.js'
 import { createDocsRouter } from './routes/docs.js'
@@ -73,6 +75,7 @@ app.use(
 )
 if (process.env.NODE_ENV !== 'test') app.use(generalLimiter)
 app.use('/api/auth/passkey', createPasskeyAuthRouter())
+app.use(createDispatchPriorityMiddleware())
 const dispatchRouters = createDispatchRouters()
 const federationRouter = createFederationRouter()
 app.use('/api/v1/dispatch', apiVersionMiddleware('v1'), dispatchRouters.api)
@@ -120,7 +123,8 @@ app.get('/api/state/snapshots/latest', (_req: Request, res: Response) => {
 })
 
 // Secure Authenticated Endpoint Example using Cryptographic Auth Middleware
-app.post('/api/protected/action', authMiddleware, (req: Request, res: Response) => {
+// #924 / ADR-026: a sensitive action needs a UV-verified passkey session.
+app.post('/api/protected/action', authMiddleware, requireUvTier, (req: Request, res: Response) => {
   res.json({ success: true, message: 'Authenticated payload verified successfully', user: (req as any).authenticatedUser })
 })
 

@@ -28,6 +28,8 @@ import {
   isPinLocked,
   pinLockRemainingMs,
   elevationRemainingMs,
+  lockKiosk,
+  acknowledgeHandoff,
 } from '../lib/kioskSession'
 import { getShelterName } from '../lib/geofence'
 import { appendAuditEvent } from '../lib/kioskAudit'
@@ -95,6 +97,8 @@ function KioskInner({
   const [pinError, setPinError] = useState('')
   const [pinLockSecs, setPinLockSecs] = useState(0)
   const [elevationSecs, setElevationSecs] = useState<number | null>(null)
+  const [operator, setOperator] = useState('')
+  const [, setRenderTick] = useState(0)
   const cornerTapRef = useRef<number[]>([])
   const dialogTitleId = useId()
   const pinInputRef = useRef<HTMLInputElement>(null)
@@ -181,6 +185,16 @@ function KioskInner({
     setModal('lock')
   }
 
+  // Manual lock (#925): drops elevation, the operator, and their keys. Same lock
+  // screen as auto-lock, and the next person must sign in again.
+  function handleManualLock() {
+    lockKiosk()
+    appendAuditEvent('manual_lock', shelterId)
+    setStep('welcome')
+    setDraft({ emergencyType: '', locationName: '', details: '' })
+    setModal('lock')
+  }
+
   function handleUnlock() {
     // Resume session
     startKioskSession(shelterId, shelterName)
@@ -213,11 +227,16 @@ function KioskInner({
   async function handlePinSubmit() {
     if (isPinLocked()) return
     setPinError('')
-    const result = await attemptPinElevation(pin)
+    const result = await attemptPinElevation(pin, operator)
     setPin('')
-    if (result === 'elevated') {
+    if (result === 'invalid-operator') {
+      setPinError(t('kiosk.operator.invalid', 'Enter your operator ID: letters, digits or dashes.'))
+    } else if (result === 'elevated') {
+      const handedOff = getKioskSession()?.handoffFrom != null
       await appendAuditEvent('pin_elevated', shelterId)
+      if (handedOff) await appendAuditEvent('shift_handoff', shelterId)
       setElevationSecs(Math.ceil((10 * 60 * 1000) / 1000))
+      setOperator('')
       setModal('none')
     } else if (result === 'locked') {
       await appendAuditEvent('pin_locked', shelterId)
@@ -263,6 +282,13 @@ function KioskInner({
         idleState={idleState}
         secondsRemaining={secondsRemaining}
         onSwitchLang={switchLang}
+        operatorId={session?.operatorId ?? null}
+        handoffFrom={session?.handoffFrom ?? null}
+        onLock={handleManualLock}
+        onAcknowledgeHandoff={() => {
+          acknowledgeHandoff()
+          setRenderTick((n) => n + 1)
+        }}
       />
 
       {/* ── Main intake area ── */}
@@ -327,6 +353,8 @@ function KioskInner({
           lockSecsRemaining={pinLockSecs}
           inputRef={pinInputRef}
           onChange={setPin}
+          operator={operator}
+          onOperatorChange={setOperator}
           onSubmit={handlePinSubmit}
           onStaffExit={elevated ? handleStaffExit : undefined}
           onCancel={() => { setPin(''); setPinError(''); setModal('none') }}
@@ -354,6 +382,10 @@ function KioskBanner({
   idleState,
   secondsRemaining,
   onSwitchLang,
+  operatorId,
+  handoffFrom,
+  onLock,
+  onAcknowledgeHandoff,
 }: {
   shelterName: string
   elevated: boolean
@@ -361,9 +393,14 @@ function KioskBanner({
   idleState: string
   secondsRemaining: number | null
   onSwitchLang: (code: string) => void
+  operatorId: string | null
+  handoffFrom: string | null
+  onLock: () => void
+  onAcknowledgeHandoff: () => void
 }) {
   const { t, i18n } = useTranslation()
   const currentLang = i18n.resolvedLanguage || 'en'
+  const limitedMode = !elevated
 
   return (
     <header
@@ -396,6 +433,27 @@ function KioskBanner({
             {t('kiosk.staff', 'STAFF')} {elevationSecs}s
           </span>
         )}
+        {elevated && operatorId && (
+          <span style={{ fontSize: 10, color: 'rgba(242,236,220,0.7)' }}>
+            {t('kiosk.operator.signedIn', 'Operator')} {operatorId}
+          </span>
+        )}
+        {limitedMode && (
+          <span
+            role="status"
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.8px',
+              color: '#F4ECDC',
+              background: 'rgba(127,184,186,0.18)',
+              borderRadius: 6,
+              padding: '3px 7px',
+            }}
+          >
+            {t('kiosk.limited', 'LIMITED MODE · staff sign-in needed for triage')}
+          </span>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -408,6 +466,29 @@ function KioskBanner({
             {t('kiosk.lockIn', 'Locking in')} {secondsRemaining}s
           </span>
         )}
+        {handoffFrom && (
+          <span
+            role="status"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#F4ECDC', background: 'rgba(255,122,107,0.14)', borderRadius: 6, padding: '4px 8px' }}
+          >
+            {t('kiosk.handoff', 'Shift handoff: {{from}}’s session sealed', { from: handoffFrom })}
+            <button
+              type="button"
+              onClick={onAcknowledgeHandoff}
+              style={{ minHeight: 32, padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.25)', background: 'transparent', color: '#F4ECDC', fontSize: 11, cursor: 'pointer' }}
+            >
+              {t('kiosk.handoff.dismiss', 'Dismiss')}
+            </button>
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onLock}
+          aria-label={t('kiosk.lock.now', 'Lock kiosk now')}
+          style={{ minHeight: 44, minWidth: 64, padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.07)', color: '#F4ECDC', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+        >
+          {t('kiosk.lock.button', 'Lock')}
+        </button>
         {/* Language switcher — stays in kiosk scope */}
         {['en', 'ar'].map((code) => (
           <button
@@ -703,7 +784,7 @@ function LockScreenModal({ shelterName, secondsRemaining, onUnlock, titleId }: {
 }
 
 function PinModal({
-  pin, error, locked, lockSecsRemaining, inputRef, onChange, onSubmit, onStaffExit, onCancel, titleId,
+  pin, error, locked, lockSecsRemaining, inputRef, onChange, operator, onOperatorChange, onSubmit, onStaffExit, onCancel, titleId,
 }: {
   pin: string
   error: string
@@ -711,6 +792,8 @@ function PinModal({
   lockSecsRemaining: number
   inputRef: React.RefObject<HTMLInputElement | null>
   onChange: (v: string) => void
+  operator: string
+  onOperatorChange: (v: string) => void
   onSubmit: () => void
   onStaffExit?: () => void
   onCancel: () => void
@@ -745,6 +828,30 @@ function PinModal({
         ) : (
           <>
             <input
+              type="text"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              maxLength={32}
+              value={operator}
+              onChange={(e) => onOperatorChange(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder={t('kiosk.operator.placeholder', 'Operator ID')}
+              aria-label={t('kiosk.operator.label', 'Operator ID')}
+              style={{
+                width: '100%',
+                padding: '12px 14px',
+                borderRadius: 10,
+                border: '1px solid rgba(255,255,255,0.15)',
+                background: 'rgba(255,255,255,0.07)',
+                color: '#F4ECDC',
+                fontSize: 16,
+                outline: 'none',
+                boxSizing: 'border-box',
+                marginBottom: 10,
+              }}
+            />
+            <input
               ref={inputRef}
               type="password"
               inputMode="numeric"
@@ -768,7 +875,7 @@ function PinModal({
               }}
             />
             {error && <p role="alert" style={{ color: '#FF7A6B', fontSize: 13, margin: '0 0 14px' }}>{error}</p>}
-            <BigBtn onClick={onSubmit} disabled={!pin}>
+            <BigBtn onClick={onSubmit} disabled={!pin || !operator.trim()}>
               {t('kiosk.pin.enter', 'Enter')}
             </BigBtn>
           </>

@@ -166,6 +166,19 @@ export class DomainStore {
     };
   }
 
+  /**
+   * Unresolved incidents, newest first, capped at `limit`. One query. Feeds the
+   * open-today slice and the SOS geofence gate.
+   */
+  listActiveIncidents(limit = 200): Incident[] {
+    this.queryCount++;
+    return [...this.incidents.values()]
+      .filter((incident) => incident.status !== 'resolved')
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      .slice(0, Math.max(0, limit))
+      .map((incident) => ({ ...incident }));
+  }
+
   /** One query: incident + responders (REST's hand-optimised join). */
   getIncidentBundle(id: string): { incident: Incident; responders: Responder[] } | null {
     this.queryCount += 2;
