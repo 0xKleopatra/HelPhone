@@ -151,6 +151,40 @@ export function resetGapDetector(): void {
   gapLog.length = 0;
 }
 
+export interface ClockHighWaterMark {
+  doc_id: string;
+  client_id: string;
+  max_clock: number;
+}
+
+/**
+ * Puts a doc/client clock back to `clock`. `detectClockGap` advances the clock
+ * as soon as it sees a gap, so callers use this when they fail to persist the
+ * gap. That way a retry detects the gap again instead of losing it.
+ */
+export function rewindClock(docId: string, clientId: string, clock: number): void {
+  docClockMap.set(`${docId}:${clientId}`, Math.max(0, clock));
+}
+
+/**
+ * Seeds the gap detector from already-projected clocks (e.g. `MAX(clock)` per
+ * doc/client in `dispatch_log`). Without this, the first op a client sends
+ * after a restart would look like a gap back to clock 1. Never lowers a clock.
+ */
+export function seedClockHighWaterMarks(marks: ClockHighWaterMark[]): number {
+  let seeded = 0;
+  for (const mark of marks) {
+    const clock = Number(mark.max_clock);
+    if (!Number.isFinite(clock) || clock <= 0) continue;
+    const key = `${mark.doc_id}:${mark.client_id}`;
+    if (clock > (docClockMap.get(key) ?? 0)) {
+      docClockMap.set(key, clock);
+      seeded++;
+    }
+  }
+  return seeded;
+}
+
 /**
  * Detect gaps in per-doc / per-client clock sequences to prevent silent dropped operations.
  */
