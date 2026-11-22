@@ -102,6 +102,27 @@ This is a **minimal warning** - full atomic rotation requires 24h spike work:
 - [ ] Update Soroban vk_hash (contract upgrade)
 - [ ] Verify all layers accept new proofs and reject old ones
 
+### Recursive verifier inner VK pin (#938)
+
+The recursive verifier pins the inner `responder_credential` verification key
+as its public `inner_vk_hash`. CI enforces that pin:
+
+- `.github/workflows/recursive-verifier-vk.yml` recompiles the circuits
+  (`circuits/recursive_verifier/build.sh`, nargo 1.0.0-beta.9). It fails if the
+  rebuilt `responder_credential` artifact is not byte-identical to the tracked
+  one, which makes the recompile reproducible.
+- `scripts/check-recursive-verifier-vk.mjs` recomputes the inner VK hash with the
+  app's own `createAggregationProver().innerVk()` path and compares it with
+  `circuits/recursive_verifier/inner-vk.json`. On drift it prints both hashes.
+  While the pin is `null` it fails closed.
+
+To re-pin after an intentional, reviewed circuit change, run the build locally
+on the pinned toolchain, then `node scripts/check-recursive-verifier-vk.mjs --write`,
+and commit the pin file with the circuit change. The pin is the same
+`inner_vk_hash` the rotation checklist above requires every verifier to match.
+The HP-014 pin numbering is not defined in this repository. The `crypto-pins.json`
+(#779) entries are the machine-readable pins for the proving stack.
+
 **TODO (ISP-051):** Implement versioned VK lifecycle with:
 - Manifest supersession tracking
 - PWA cache version negotiation  

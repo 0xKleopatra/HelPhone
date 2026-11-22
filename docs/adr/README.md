@@ -61,6 +61,10 @@ CI verifies that the cited JSON paths and numbers still match the results.
 | [ADR-021](ADR-021-multi-vendor-cost-control.md) | No raw result cited |
 | [ADR-022](ADR-022-ble-proximity-relay.md) | No raw result cited |
 | [ADR-022](ADR-022-honest-dispatch-eta.md) | Unmeasured |
+| [ADR-023](ADR-023-canonical-contract-workspace.md) | No raw result cited |
+| [ADR-024](ADR-024-matrix-call-caching-quota.md) | No raw result cited |
+| [ADR-025](ADR-025-liability-signoff-workflow.md) | No raw result cited |
+| [ADR-026](ADR-026-uv-tier-policy.md) | No raw result cited |
 <!-- ADR-EVIDENCE-END -->
 
 ---

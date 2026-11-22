@@ -1,6 +1,7 @@
 import styles from "./Help.module.css";
 import { cx } from "../styles/cssModules";
 import { sanitizeText, SanitizedHtml } from "../lib/htmlSanitizer";
+import { collapseResponderPins } from "../lib/responderPins";
 import { useState, useEffect, useRef, Fragment, useCallback } from "react";
 // ── Field ops (ISP-131 rugged/SOS, ISP-134 NFC staging, ISP-135 radio) ──
 import RadioSheet from "../components/field/RadioSheet";
@@ -1602,14 +1603,13 @@ export default function Help() {
           },
         ]
       : []),
-    ...responders
-      .filter((r) => r && Number.isFinite(r.lat) && Number.isFinite(r.lng))
-      .map((r) => ({
-        id: `resp-${r.id}`,
-        lat: r.lat,
-        lng: r.lng,
-        kind: responderArrived ? "resolved" : "enroute",
-      })),
+    // #922: one pin per responder DID, not per contract slot.
+    ...collapseResponderPins(responders, { arrived: responderArrived }).map((pin) => ({
+      id: pin.id,
+      lat: pin.lat,
+      lng: pin.lng,
+      kind: pin.kind,
+    })),
     ...openRequests
       .filter((req) => req && Number.isFinite(req.lat) && Number.isFinite(req.lng))
       .map((req) => ({
