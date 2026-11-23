@@ -29,6 +29,10 @@ import {
   readMeteredSignal,
   readSyncBatteryLevel,
 } from "../lib/raceGate.ts";
+import {
+  buildTransportAttributes,
+  emitTransportTelemetry,
+} from "../lib/transportTelemetry.ts";
 
 export const TRANSPORTS = Object.freeze(["webtransport", "websocket", "sse"]);
 
@@ -728,6 +732,15 @@ export function createNetworkTransport(options) {
         raceVetoes: { ...metrics.raceVetoes },
         failures: { ...metrics.failures },
       };
+    },
+    /**
+     * Emit a transport field-telemetry span into `pipeline` (issue #913).
+     *
+     * Call this on `visibilitychange` → hidden, or after each fallback/migration
+     * event.  Returns true when the span was accepted by the ring.
+     */
+    emitTelemetry(pipeline) {
+      return emitTransportTelemetry(pipeline, this.getMetrics());
     },
   };
 }
