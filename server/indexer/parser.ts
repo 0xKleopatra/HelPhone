@@ -10,9 +10,17 @@
  */
 // @ts-ignore — plain JS helper shared with the Express server
 import { redactObject } from '../lib/redact.js';
+import {
+  classifyFinality,
+  isOrphaned,
+  DEFAULT_FINALITY_DEPTH,
+  type FinalityTier,
+  type FinalityOptions,
+  type LedgerSighting,
+} from '../lib/finality.js';
 
 /** Parsed event types from the HelPhone contract */
-export type EventType = 'created' | 'accepted' | 'arrived' | 'resolved' | 'unknown' | 'federated_dispatch' | 'federated_ack';
+export type EventType = 'created' | 'accepted' | 'arrived' | 'resolved' | 'unknown' | 'federated_dispatch' | 'federated_ack' | 'checkpoint_committed';
 
 export type CustodyMarker = 'local_verified' | 'peer_asserted' | 'relayed';
 
@@ -216,3 +224,92 @@ export async function persistGapToDb(
   );
 }
 
+
+// ── CheckpointCommitted branch (issue #916, spike #727) ──────────────────────
+//
+// A CheckpointCommitted event is emitted by the contract when a ledger is
+// closed and recorded on-chain.  First sight is ALWAYS pending (depth 0);
+// it can never arrive as finalized because the tip ledger has depth 0 by
+// definition.  The indexer re-classifies stored sightings as deeper ledgers
+// arrive.
+
+export interface ParsedCheckpoint {
+  eventType: 'checkpoint_committed';
+  /** Ledger sequence number of the checkpoint. */
+  ledger: number;
+  /** Canonical ledger hash from the contract event. */
+  ledgerHash: string;
+  /**
+   * Depth behind the current tip at parse time.
+   * First sight = 0 (pending).  Callers must re-classify when the tip advances.
+   */
+  depth: number;
+  /** Finality tier derived from depth and k at parse time. */
+  finalityTier: FinalityTier;
+  raw: { topics: string[]; data: unknown };
+}
+
+/**
+ * Parse a raw `CheckpointCommitted` contract event into a `ParsedCheckpoint`.
+ *
+ * Topic layout (0-indexed):
+ *   [0] event name ("CheckpointCommitted" or variant)
+ *   [1] ledger sequence (string-encoded u32)
+ *   [2] ledger hash (hex string)
+ *
+ * `currentTip` is the tip ledger sequence at parse time — used to derive
+ * the initial depth.  Pass the value from `getLatestLedger` or the event
+ * stream cursor; default to `ledger` itself when unavailable so depth = 0.
+ */
+export function parseCheckpointCommitted(
+  topics: string[],
+  data: unknown,
+  currentTip?: number,
+  options: FinalityOptions = {},
+): ParsedCheckpoint {
+  const ledger = Number(topics[1] ?? '0');
+  const ledgerHash = String(topics[2] ?? '');
+
+  if (!Number.isInteger(ledger) || ledger <= 0) {
+    throw new RangeError(`CheckpointCommitted: invalid ledger sequence "${topics[1]}"`);
+  }
+  if (!ledgerHash) {
+    throw new TypeError('CheckpointCommitted: missing ledger hash in topics[2]');
+  }
+
+  // First sight of a checkpoint is always at depth 0 (pending).  The tip at
+  // parse time should equal or exceed the checkpoint ledger; guard against
+  // callers passing a stale tip that would yield a negative depth.
+  const tip = currentTip ?? ledger;
+  const depth = Math.max(0, tip - ledger);
+  const finalityTier = classifyFinality(depth, options);
+
+  return {
+    eventType: 'checkpoint_committed',
+    ledger,
+    ledgerHash,
+    depth,
+    finalityTier,
+    raw: { topics, data: redactObject(data) },
+  };
+}
+
+/**
+ * Re-classify a stored checkpoint sighting when the tip advances.
+ * Returns a new object; does not mutate the original.
+ *
+ * If `newSighting.ledgerHash` differs from the stored hash the checkpoint
+ * is marked orphaned regardless of depth.
+ */
+export function reclassifyCheckpoint(
+  stored: ParsedCheckpoint,
+  newTip: number,
+  newSighting?: LedgerSighting,
+  options: FinalityOptions = {},
+): ParsedCheckpoint {
+  if (newSighting && isOrphaned({ ledger: stored.ledger, ledgerHash: stored.ledgerHash }, newSighting)) {
+    return { ...stored, finalityTier: 'orphaned', depth: stored.depth };
+  }
+  const depth = Math.max(0, newTip - stored.ledger);
+  return { ...stored, depth, finalityTier: classifyFinality(depth, options) };
+}
