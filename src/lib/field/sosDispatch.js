@@ -15,14 +15,17 @@
  */
 
 import { queueByKind, removeEntry } from "./offlineQueue";
+import { currentOrigin, resolveEndpoint } from "../endpointDefaults";
 
-const FALLBACK_BASE = "http://localhost:3001";
-
+// Production drains to the deployed origin, never a loopback address (#927).
 function resolveBase() {
   try {
-    return import.meta.env?.VITE_SERVER_URL || FALLBACK_BASE;
+    return resolveEndpoint(import.meta.env?.VITE_SERVER_URL, "", {
+      isProd: import.meta.env?.PROD === true,
+      origin: currentOrigin(),
+    });
   } catch {
-    return FALLBACK_BASE;
+    return ""; // same-origin path, never a loopback address
   }
 }
 

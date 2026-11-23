@@ -84,6 +84,9 @@ jobs:
       - name: Verify environment templates
         run: npm run config:check
 
+      - name: Reject IPv4-literal endpoints in env templates (#927)
+        run: npm run security:endpoint-literals
+
       - name: Scan dependency lifecycle scripts
         run: bash scripts/sandbox-install.sh --scan node_modules
 
