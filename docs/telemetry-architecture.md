@@ -95,3 +95,63 @@ Every probe is wrapped in a non-throwing guard (`safe()`): when a browser or run
 | Client ring and crash dumps | `ts` / `mono` | Device wall clock, which can be minutes off | Low until corrected |
 
 `GET /api/time` and `estimateClockOffset()` give a Cristian offset (±RTT/2). `scripts/build-incident-tape.js` adds that offset to each source's times. Ledger events keep their own time. Events whose times are within each other's error margin are ordered by `ledgerSeq`, and then by monotonic order within the same device. Each output event has `tCorrected`, `tConfidenceMs`, `source` and `causalSeq`. The output is scrubbed by default; `--include-raw` is a break-glass option and is logged.
+
+## Transport field telemetry (#913, ADR-003 follow-up 3)
+
+The `createNetworkTransport()` instance exposes an `emitTelemetry(pipeline)` method that snapshots `getMetrics()` and records a `transport.field_metrics` span with priority `low`.  Call it on `visibilitychange → hidden` or after each transport fallback / QUIC migration event so the field dashboard captures UDP-block rates and migration-survival ratios without polling overhead.
+
+### Emitted span attributes
+
+| Attribute | Type | Bounded by | Purpose |
+|---|---|---|---|
+| `transport.reconnect_gaps_ms` | `number[]` | last 20 entries; each ≤ 300 000 ms | Distribution of reconnect gap durations; feeds UDP-block-rate dashboard |
+| `transport.reconnect_gap_p50` | `number` | derived | p50 reconnect gap in ms |
+| `transport.reconnect_gap_max` | `number` | derived | Maximum gap in ms this session |
+| `transport.fallbacks` | `number` | session counter | WebTransport → WebSocket → SSE downgrades |
+| `transport.failures.webtransport` | `number` | capped at 100 | Consecutive WebTransport failures; high values indicate UDP-blocked network |
+| `transport.migrations_survived` | `number` | session counter | QUIC connection migration successes (network interface switches that did not drop the stream) |
+| `transport.connects` | `number` | session counter | Total successful connects across all transport types |
+
+### PII / redaction contract
+
+- No IP addresses, user IDs, wallet addresses, or message content enter the span.
+- `reconnect_gaps_ms` is capped at **20 entries** so long sessions cannot grow the payload.
+- Each gap value is clamped to **300 000 ms** (5 min) to prevent outlier values from fingerprinting a user's network event sequence.
+- `failures.webtransport` is capped at **100** to prevent large counters encoding information.
+- The span carries no location data; the `TelemetryRedactor` drop-list therefore has nothing to redact from it.
+
+### Field dashboard metrics
+
+| Dashboard metric | Derived from |
+|---|---|
+| UDP-block rate | `transport.failures.webtransport` ≥ `maxFailures` (2) across the fleet |
+| Migration survival rate | `transport.migrations_survived / transport.connects` |
+| Reconnect P50 / P95 | `transport.reconnect_gaps_ms` aggregated server-side |
+
+### Integration example
+
+```ts
+// Wire into app lifecycle — emit on hide to avoid extra traffic.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    transport.emitTelemetry(telemetryPipeline)
+  }
+})
+
+// Also emit after each fallback for real-time alerting.
+const t = createNetworkTransport({
+  endpoints,
+  onStatus: ({ state, transport: kind, reason }) => {
+    if (reason === 'fallback') {
+      t.emitTelemetry(telemetryPipeline)
+    }
+  },
+})
+```
+
+### Implementation files
+
+| File | Role |
+|---|---|
+| `src/lib/transportTelemetry.ts` | `buildTransportAttributes`, `emitTransportTelemetry`, bounding constants |
+| `src/services/networkTransport.js` | `emitTelemetry(pipeline)` method on the transport instance |
