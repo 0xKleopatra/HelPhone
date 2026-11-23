@@ -54,7 +54,7 @@ unchecked CODEOWNERS review items.
 | [ADR-004](ADR-004-offgrid-map-sync.md) | Checked (1 result) |
 | [ADR-005](ADR-005-zk-proof-aggregation.md) | Checked (1 result) |
 | [ADR-006](ADR-006-offline-routing.md) | Checked (3 results) |
-| [ADR-007](ADR-007-offline-storage.md) | Checked (1 result) |
+| [ADR-007](ADR-007-offline-storage.md) | Checked (4 results) |
 | [ADR-008](ADR-008-webgpu-spatial-clustering.md) | No raw result cited |
 | [ADR-014](ADR-014-binary-telemetry-protocol.md) | Checked (4 results) |
 | [ADR-015](ADR-015-tokenomics-fee-envelope.md) | No raw result cited |

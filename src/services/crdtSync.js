@@ -29,6 +29,7 @@
 // the same convergence digest (#932). Re-exported here for existing callers.
 import { stateDigest, sha256Hex, isValidVector, sumVector, vectorAdvances, opIdentity } from "../lib/syncIntegrity.js";
 import { createJoinReceipt, verifyJoinCompleteness } from "../lib/joinReceipt.js";
+import { requestPersistentStorage } from "./storagePolicy.js";
 export { stateDigest };
 
 /** UTF-8 byte length of the JSON wire encoding. */
@@ -651,8 +652,20 @@ export async function hydratePaged({
   onProgress = () => {},
   abortSignal = null,
   verifyReceipt = true,
+  requestPersistence = requestPersistentStorage,
+  onPersistence = () => {},
 } = {}) {
   const startedAt = now();
+  // #895: joining an incident is the moment its offline data starts to
+  // matter, so ask (once per origin) for storage the browser will not evict.
+  // Never awaited on the hot path and never fatal: a denied request still
+  // lets the join proceed on best-effort storage.
+  if (typeof requestPersistence === 'function') {
+    Promise.resolve()
+      .then(() => requestPersistence({ trigger: 'incident-join' }))
+      .then((state) => onPersistence(state))
+      .catch(() => {});
+  }
   const stats = { totalFetched: 0, duplicatesSkipped: 0, discardedOps: 0 };
   const seen = new Set();
   let actionableItems = [];
