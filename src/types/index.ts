@@ -563,6 +563,8 @@ export interface EndpointHealth {
   lastCheckedAt: number | null;
   active: boolean;
   primary: boolean;
+  /** Class of the latest consecutive failure; `ipv6-nat64` marks IPv6-only bearers (#928). */
+  failureClass?: 'timeout' | 'http' | 'unhealthy' | 'ipv6-nat64' | 'network' | null;
 }
 
 export interface RpcHealthSnapshot {

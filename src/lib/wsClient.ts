@@ -1,3 +1,4 @@
+import { classifyProbeFailure, type ProbeFailureClass } from './networkEstimator';
 import {
   createRaceTracker,
   decideRace,
@@ -63,6 +64,7 @@ export class WsClient {
   private cachedBatteryLevel: number | null = null;
   private duplicatesDropped = 0;
   private racesFired = 0;
+  private lastFailureClass: ProbeFailureClass | null = null;
 
   constructor(private options: WsClientOptions) {
     this.url = options.url;
@@ -121,6 +123,8 @@ export class WsClient {
     };
 
     this.ws.onerror = () => {
+      // Browsers expose no error detail on WebSocket, so the bucket comes from the endpoint shape (#928).
+      this.lastFailureClass = classifyProbeFailure(this.url, { error: 'websocket error' });
       this.ws?.close();
     };
   }
@@ -150,6 +154,11 @@ export class WsClient {
 
   getDuplicatesDropped(): number {
     return this.duplicatesDropped;
+  }
+
+  /** Class of the most recent socket error, or null before any error (#928). */
+  getLastFailureClass(): ProbeFailureClass | null {
+    return this.lastFailureClass;
   }
 
   getRacesFired(): number {
