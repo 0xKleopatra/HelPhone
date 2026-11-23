@@ -255,13 +255,17 @@ export class StateVectorDoc {
    * @param {string[]} [roster] every replica id that may still sync
    * @param {Record<string, number>} [tombstoneSV] full-roster stable vector
    *   (defaults to `stableSV`, correct when it already spans the roster)
+   * @param {string[]} [retired] clients removed from the roster for good
+   *   (#894). They are left out of condition 2: the caller guarantees none of
+   *   their ops will be integrated again, so none can be in flight.
    */
-  prune(stableSV, roster = [], tombstoneSV = stableSV) {
+  prune(stableSV, roster = [], tombstoneSV = stableSV, retired = []) {
     let droppedOps = 0;
     let droppedTombstones = 0;
     let horizon = Infinity;
+    const skip = new Set(retired);
     for (const client of new Set([...this.sv.keys(), ...Object.keys(tombstoneSV), ...roster]))
-      horizon = Math.min(horizon, this.#lamportFloor(client, tombstoneSV[client] || 0));
+      if (!skip.has(client)) horizon = Math.min(horizon, this.#lamportFloor(client, tombstoneSV[client] || 0));
 
     for (const [client, ops] of this.log) {
       const stable = stableSV[client] || 0;

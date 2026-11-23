@@ -44,6 +44,7 @@ import {
 import { NetworkStatusIndicator } from "../components/NetworkStatusIndicator.jsx";
 import { ReplicaStaleBadge } from "../components/ReplicaStaleBadge.jsx";
 import OfflineRoutePanel from "../features/help/OfflineRoutePanel.jsx";
+import IncidentMapSyncPanel from "../features/help/IncidentMapSyncPanel.jsx";
 import { useReplicaLag } from "../hooks/useReplicaLag.js";
 import {
   dispatchOverrideMessage,
@@ -3025,6 +3026,8 @@ export default function Help() {
 
           {/* #893: offline A* routing from the selected location (routingWorker). */}
           <OfflineRoutePanel location={location} />
+          {/* #894: pruned state-vector CRDT sync of the shared incident map. */}
+          <IncidentMapSyncPanel location={location} />
 
           {isGetMode && (
             <>

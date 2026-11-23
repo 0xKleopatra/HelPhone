@@ -51,7 +51,7 @@ unchecked CODEOWNERS review items.
 | [ADR-001](ADR-001-soroban-incident-storage.md) | No raw result cited |
 | [ADR-002](ADR-002-wasm-memory-isolation.md) | No raw result cited |
 | [ADR-003](ADR-003-webtransport-vs-websocket.md) | Checked (1 result) |
-| [ADR-004](ADR-004-offgrid-map-sync.md) | Checked (1 result) |
+| [ADR-004](ADR-004-offgrid-map-sync.md) | Checked (2 results) |
 | [ADR-005](ADR-005-zk-proof-aggregation.md) | Checked (1 result) |
 | [ADR-006](ADR-006-offline-routing.md) | Checked (3 results) |
 | [ADR-007](ADR-007-offline-storage.md) | Checked (4 results) |
