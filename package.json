@@ -62,6 +62,7 @@
     "security:licenses": "node scripts/security/license_compliance.js",
     "security:cargo": "bash scripts/security/cargo_minimal_versions.sh --check-only",
     "security:typosquat": "node scripts/detect-typosquatting.js",
+    "security:endpoint-literals": "node scripts/security/endpoint_literals.js .env.example .env.production",
     "security:transitive-vuln": "node scripts/transitive-vulnerability-scanner.js",
     "security:wasm-verify": "bash scripts/verify-wasm-build.sh",
     "security:dep-health": "node scripts/monitor-dep-health.js --offline",

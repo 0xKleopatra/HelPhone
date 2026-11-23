@@ -17,6 +17,7 @@ import {
   StrKey,
 } from "@stellar/stellar-sdk";
 import { parseEndpointList } from "./networkEstimator";
+import { currentOrigin, resolveEndpoint } from "./endpointDefaults";
 import { initRpcHealth, reportRpcFailure } from "./rpcHealth";
 import { toAssetRow, toAmount, classifyOracleError, ORACLE_ERROR_MESSAGES } from "./treasury";
 import type {
@@ -809,8 +810,11 @@ export async function getExpertVerificationWindow(walletAddress) {
 // server/index.js). Falls back gracefully: callers keep their own
 // interval-based refresh as a backstop and just refresh sooner/less often
 // depending on whether this connects.
-const EVENTS_URL =
-  import.meta.env?.VITE_EVENTS_URL || "http://localhost:3001/events/stream";
+// Production resolves against the deployed origin, never a loopback default (#927).
+const EVENTS_URL = resolveEndpoint(import.meta.env?.VITE_EVENTS_URL, "/events/stream", {
+  isProd: import.meta.env?.PROD === true,
+  origin: currentOrigin(),
+});
 const EVENTS_WS_URL = import.meta.env?.VITE_EVENTS_WS_URL ||
   `${EVENTS_URL.replace(/^http/, "ws").replace(/\/events\/stream(?:\?.*)?$/, "/events/ws")}`;
 

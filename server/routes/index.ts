@@ -4,6 +4,7 @@ import { createEventsRouter } from './events.ts';
 import { createSyncRouter } from './sync.ts';
 import { createDocsRouter } from './docs.ts';
 import { createRadioGatewayRouter } from './radioGateway.ts';
+import { stagingRouterFromEnv } from './staging.ts';
 import { installGraphQLRoutes } from '../graphql/server.ts';
 import { getDomainStore, type DomainStore } from '../lib/domainStore.ts';
 
@@ -32,6 +33,7 @@ export function installDomainRoutes(app: Express, options: DomainRoutesOptions =
   app.use('/api/events', createEventsRouter({ store: options.store }));
   app.use('/api/sync', createSyncRouter({ store: options.store }));
   app.use('/api/radio', createRadioGatewayRouter({ store: options.store ?? getDomainStore() }));
+  app.use('/api/staging', stagingRouterFromEnv());
   app.use('/docs', createDocsRouter());
 
   const graphqlPath = options.graphqlPath ?? '/graphql';
