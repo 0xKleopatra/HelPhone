@@ -35,7 +35,7 @@ import {
   validateZone,
   violationFromVaultError,
 } from "../src/lib/privacy.js";
-import { buildLocationProofZone } from "../src/lib/zk.js";
+import { buildLocationProofZone } from "../src/lib/zk";
 
 const ON = { ...DEFAULT_ZONE_PRIVACY, enabled: true };
 const MIN = 300_000n; // default: b = 100_000, t = 3

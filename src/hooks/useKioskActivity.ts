@@ -1,5 +1,9 @@
 /**
- * useNetworkQuality — tracks connection quality and idle time.
+ * useKioskActivity — tracks connection quality and idle time for the kiosk.
+ *
+ * Formerly `useNetworkQuality.ts`, a twin of the unrelated RPC-health hook
+ * `useNetworkQuality.js` (#901). Under the shared name, the kiosk received the
+ * RPC-health hook at run time instead of this one.
  *
  * Used by the kiosk auto-lock: pointer/keyboard events reset the idle timer;
  * when no activity is detected for `warnAfterMs` we emit 'warn', and after
@@ -9,7 +13,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 export type IdleState = 'active' | 'warn' | 'lock'
 
-export interface NetworkQualityState {
+export interface KioskActivityState {
   online: boolean
   effectiveType: string | null
   idleState: IdleState
@@ -19,7 +23,7 @@ export interface NetworkQualityState {
   clockAccuracyMs: number | null
 }
 
-export interface UseNetworkQualityOptions {
+export interface UseKioskActivityOptions {
   /** ms of inactivity before showing the countdown warning (default 90 000) */
   warnAfterMs?: number
   /** ms of inactivity before locking (default 120 000) */
@@ -34,7 +38,7 @@ export interface UseNetworkQualityOptions {
 
 const ACTIVITY_EVENTS = ['pointermove', 'pointerdown', 'keydown', 'touchstart'] as const
 
-export function useNetworkQuality(options: UseNetworkQualityOptions = {}): NetworkQualityState & {
+export function useKioskActivity(options: UseKioskActivityOptions = {}): KioskActivityState & {
   resetIdle: () => void
 } {
   const {

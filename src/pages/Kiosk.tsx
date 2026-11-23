@@ -16,7 +16,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useEscapeKey } from '../hooks/useEscapeKey'
-import { useNetworkQuality } from '../hooks/useNetworkQuality'
+import { useKioskActivity } from '../hooks/useKioskActivity'
 import { useGeofencing } from '../hooks/useGeofencing'
 import { sanitizeText, SanitizedHtml } from '../lib/htmlSanitizer'
 import {
@@ -107,7 +107,7 @@ function KioskInner({
   const { insidePolygon, error: geoError } = useGeofencing(shelterId)
 
   // Network quality + idle tracking
-  const { idleState, secondsRemaining, resetIdle } = useNetworkQuality({
+  const { idleState, secondsRemaining, resetIdle } = useKioskActivity({
     warnAfterMs: WARN_MS,
     lockAfterMs: LOCK_MS,
     trackIdle: true,
@@ -120,7 +120,7 @@ function KioskInner({
   })
 
   // Focus trap — always active in kiosk
-  useFocusTrap(containerRef, { enabled: true })
+  useFocusTrap(true, containerRef)
 
   // Escape → step back (never exit kiosk)
   useEscapeKey(

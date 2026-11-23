@@ -90,6 +90,30 @@ export default [
       'no-implied-eval': 'error',
       'no-new-func': 'error',
 
+      // ── Twin modules (#901, docs/adr/ADR-027) ──────────────────────────────
+      // These modules used to exist as both .js and .ts. Vite ran one twin
+      // while tsc checked the other. Each now has one canonical file; importing
+      // a removed twin by explicit extension is an error, so it cannot quietly
+      // come back.
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { regex: '(^|/)pages/Help\\.tsx$', message: 'Removed twin (ADR-027): import pages/Help (Help.jsx).' },
+            { regex: '(^|/)MapboxWrapper\\.jsx$', message: 'Removed twin (ADR-027): import components/MapboxWrapper (MapboxWrapper.tsx).' },
+            { regex: '(^|/)useEscapeKey\\.jsx?$', message: 'Removed twin (ADR-027): import hooks/useEscapeKey (useEscapeKey.ts).' },
+            { regex: '(^|/)useFocusTrap\\.jsx?$', message: 'Removed twin (ADR-027): import hooks/useFocusTrap (useFocusTrap.ts).' },
+            { regex: '(^|/)useGeofencing\\.jsx?$', message: 'Removed twin (ADR-027): import hooks/useGeofencing (useGeofencing.ts).' },
+            { regex: '(^|/)useNetworkQuality\\.tsx?$', message: 'Removed twin (ADR-027): useNetworkQuality.js is RPC health; the kiosk idle tracker is hooks/useKioskActivity.' },
+            { regex: '(^|/)useDocumentTitle\\.jsx?$', message: 'Removed twin (ADR-027): import lib/useDocumentTitle (useDocumentTitle.ts).' },
+            { regex: '(^|/)wasmMemory\\.jsx?$', message: 'Removed twin (ADR-027): import lib/wasmMemory (wasmMemory.ts).' },
+            { regex: '(^|/)lib/zk\\.jsx?$', message: 'Removed twin (ADR-027): import lib/zk (zk.ts).' },
+            { regex: '(^|/)base64Utils\\.tsx?$', message: 'Removed twin (ADR-027): import ./base64Utils.js.' },
+            { regex: '(^|/)routes/health\\.tsx?$', message: 'Removed twin (ADR-027): import ./routes/health.js.' },
+          ],
+        },
+      ],
+
       // ── XSS prevention rule ───────────────────────────────────────────────
       // Raw dangerouslySetInnerHTML and direct innerHTML assignments are banned.
       // All rendered HTML content must pass through sanitizeHtml() in
