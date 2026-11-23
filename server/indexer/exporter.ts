@@ -208,11 +208,14 @@ export function projectMaintainerPayouts(
 /**
  * Projects a batch of dispatch ops into `dispatch_log` and advances `indexer_checkpoint`
  * within a single atomic transaction protected by an advisory transaction lock.
+ *
+ * Pass `checkpoint: null` to project without moving the checkpoint. Gap backfill
+ * uses this: it replays older clocks, so it must not rewind the live exporter's position.
  */
 export async function projectDispatchBatch(
   client: QueryRunner,
   ops: DispatchLogOp[],
-  checkpoint: { lsn: string; seq: number }
+  checkpoint: { lsn: string; seq: number } | null
 ): Promise<{ projectedCount: number; duplicateCount: number }> {
   await client.query('BEGIN');
   try {
@@ -254,15 +257,17 @@ export async function projectDispatchBatch(
     }
 
     // Record checkpoint in the EXACT SAME transaction
-    await client.query(
-      `INSERT INTO indexer_checkpoint (id, last_lsn, last_seq, updated_at)
-       VALUES (1, $1, $2, NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         last_lsn = EXCLUDED.last_lsn,
-         last_seq = EXCLUDED.last_seq,
-         updated_at = NOW()`,
-      [checkpoint.lsn, checkpoint.seq]
-    );
+    if (checkpoint) {
+      await client.query(
+        `INSERT INTO indexer_checkpoint (id, last_lsn, last_seq, updated_at)
+         VALUES (1, $1, $2, NOW())
+         ON CONFLICT (id) DO UPDATE SET
+           last_lsn = EXCLUDED.last_lsn,
+           last_seq = EXCLUDED.last_seq,
+           updated_at = NOW()`,
+        [checkpoint.lsn, checkpoint.seq]
+      );
+    }
 
     await client.query('COMMIT');
     return { projectedCount, duplicateCount };
@@ -270,6 +275,23 @@ export async function projectDispatchBatch(
     await client.query('ROLLBACK').catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Highest projected clock per doc/client. Used to seed the gap detector on
+ * startup, so a restart does not report a false gap for every client.
+ */
+export async function loadClockHighWaterMarks(
+  client: QueryRunner
+): Promise<Array<{ doc_id: string; client_id: string; max_clock: number }>> {
+  const res = await client.query(
+    'SELECT doc_id, client_id, MAX(clock) AS max_clock FROM dispatch_log GROUP BY doc_id, client_id'
+  );
+  return (res.rows as any[]).map((row) => ({
+    doc_id: String(row.doc_id),
+    client_id: String(row.client_id),
+    max_clock: Number(row.max_clock),
+  }));
 }
 
 export async function getIndexerCheckpoint(client: QueryRunner): Promise<CheckpointInfo | null> {

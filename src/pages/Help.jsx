@@ -42,6 +42,12 @@ import {
   recordExpertVerification,
 } from "../lib/contract";
 import { NetworkStatusIndicator } from "../components/NetworkStatusIndicator.jsx";
+import { ReplicaStaleBadge } from "../components/ReplicaStaleBadge.jsx";
+import { useReplicaLag } from "../hooks/useReplicaLag.js";
+import {
+  dispatchOverrideMessage,
+  requiresDispatchOverride,
+} from "../lib/replicaLag.js";
 import {
   buildLocationProofZone,
   generateLocationProof,
@@ -1533,6 +1539,7 @@ export function safeToggleClass(
 }
 
 export default function Help() {
+  const replicaLagMs = useReplicaLag();
   const [mode, setMode] = useState("get");
 
   const [profile, setProfile] = useState(() => {
@@ -2200,6 +2207,15 @@ export default function Help() {
     const address = activeWalletAddress || (await promptWalletConnection());
     if (!address) {
       setSubmitError("Connect your Stellar wallet first.");
+      return;
+    }
+    // ISP-065 severe lag: responders may be looking at outdated history, so the
+    // sender must confirm before the request goes out.
+    if (
+      requiresDispatchOverride(replicaLagMs) &&
+      !window.confirm(dispatchOverrideMessage(replicaLagMs))
+    ) {
+      setSubmitError("Dispatch cancelled. Try again once history catches up.");
       return;
     }
     setSubmitting(true);
@@ -3004,6 +3020,7 @@ export default function Help() {
           </div>
 
           <NetworkStatusIndicator />
+          <ReplicaStaleBadge lagMs={replicaLagMs} />
 
           {isGetMode && (
             <>
