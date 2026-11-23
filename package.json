@@ -46,6 +46,8 @@
     "zk:shard": "python circuits/scripts/shard-aegis.py circuits/target/aegis.json public/zk-assets",
     "test:update-snapshots": "vitest run -u",
     "test:e2e:throttling": "playwright test --project=throttling",
+    "test:e2e:webrtc-nat": "playwright test --project=\"webrtc-nat-*\"",
+    "test:e2e:background-kill": "playwright test --project=background-kill",
     "test:layout": "playwright test --project=\"layout-*\"",
     "test:layout:generate": "playwright test --project=\"layout-*\" --update-snapshots",
     "lint": "eslint .",
