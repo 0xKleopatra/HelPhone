@@ -43,6 +43,7 @@ import {
 } from "../lib/contract";
 import { NetworkStatusIndicator } from "../components/NetworkStatusIndicator.jsx";
 import { ReplicaStaleBadge } from "../components/ReplicaStaleBadge.jsx";
+import OfflineRoutePanel from "../features/help/OfflineRoutePanel.jsx";
 import { useReplicaLag } from "../hooks/useReplicaLag.js";
 import {
   dispatchOverrideMessage,
@@ -3021,6 +3022,9 @@ export default function Help() {
 
           <NetworkStatusIndicator />
           <ReplicaStaleBadge lagMs={replicaLagMs} />
+
+          {/* #893: offline A* routing from the selected location (routingWorker). */}
+          <OfflineRoutePanel location={location} />
 
           {isGetMode && (
             <>

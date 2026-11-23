@@ -98,7 +98,10 @@ self.addEventListener("activate", (event) => {
           if (
             cacheName !== CACHE_NAME &&
             cacheName !== "helphone-zk-assets-v1" &&
-            cacheName !== TILES_CACHE_NAME
+            cacheName !== TILES_CACHE_NAME &&
+            // Offline routing tiles (#893) are versioned and verified by the
+            // app; a service worker update must not wipe them.
+            !cacheName.startsWith("helphone-routing-tiles-")
           ) {
             return caches.delete(cacheName);
           }
