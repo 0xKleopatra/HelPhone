@@ -154,3 +154,75 @@ export async function verifyBundleFile(data, entry) {
     });
   return bytes;
 }
+
+// ── Signed manifests (#896) ─────────────────────────────────────────────────
+//
+// A signed bundle wraps the manifest with an Ed25519 signature over its
+// canonical JSON:
+//   { manifest, signature: { alg: "Ed25519", keyId, value: base64 } }
+// `keyId` is the first 16 hex characters of SHA-256 over the raw 32-byte
+// public key. Clients trust only keys compiled into the app; a manifest that
+// is unsigned, signed by an unknown key, or altered after signing is refused,
+// so a compromised tile host cannot swap both a tile and its hash.
+
+function toBase64(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
+}
+
+function fromBase64(text) {
+  const s = atob(text);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
+/** Key id for a raw Ed25519 public key (Uint8Array, 32 bytes). */
+export async function bundleKeyId(rawPublicKey) {
+  return (await sha256Hex(rawPublicKey)).slice(0, 16);
+}
+
+/** Signs a manifest with an Ed25519 CryptoKey (private, "sign" usage). */
+export async function signBundleManifest(manifest, privateKey, rawPublicKey) {
+  validateBundleManifest(manifest);
+  const value = new Uint8Array(
+    await subtle().sign({ name: "Ed25519" }, privateKey, new TextEncoder().encode(canonicalJson(manifest))),
+  );
+  return { manifest, signature: { alg: "Ed25519", keyId: await bundleKeyId(rawPublicKey), value: toBase64(value) } };
+}
+
+/**
+ * Verifies a signed bundle against trusted keys ({ keyId: base64 raw public
+ * key }) and returns its manifest. Throws BundleIntegrityError:
+ * "unsigned" | "unknown-key" | "bad-signature" | "malformed-manifest".
+ */
+export async function verifySignedManifest(signed, trustedKeys, { kind } = {}) {
+  if (!signed || typeof signed !== "object" || !signed.manifest)
+    throw new BundleIntegrityError("malformed-manifest", "Not a signed bundle");
+  const sig = signed.signature;
+  if (!sig || sig.alg !== "Ed25519" || typeof sig.value !== "string" || typeof sig.keyId !== "string")
+    throw new BundleIntegrityError("unsigned", "Bundle manifest is not signed");
+  const keyB64 = trustedKeys && Object.prototype.hasOwnProperty.call(trustedKeys, sig.keyId) ? trustedKeys[sig.keyId] : null;
+  if (!keyB64) throw new BundleIntegrityError("unknown-key", `Bundle signed by an untrusted key (${sig.keyId})`);
+  const raw = fromBase64(keyB64);
+  if ((await bundleKeyId(raw)) !== sig.keyId)
+    throw new BundleIntegrityError("unknown-key", "Trusted key does not match its key id");
+  const key = await subtle().importKey("raw", raw, { name: "Ed25519" }, false, ["verify"]);
+  let signature;
+  try {
+    signature = fromBase64(sig.value);
+  } catch {
+    throw new BundleIntegrityError("bad-signature", "Signature is not base64");
+  }
+  const ok = await subtle().verify(
+    { name: "Ed25519" },
+    key,
+    signature,
+    new TextEncoder().encode(canonicalJson(signed.manifest)),
+  );
+  if (!ok) throw new BundleIntegrityError("bad-signature", "Bundle manifest signature does not verify");
+  return validateBundleManifest(signed.manifest, { kind });
+}
+
+export { toBase64 as _toBase64, fromBase64 as _fromBase64 };

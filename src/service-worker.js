@@ -5,10 +5,30 @@ import { ExpirationPlugin } from "workbox-expiration";
 import { CacheableResponsePlugin } from "workbox-cacheable-response";
 import { createPartialResponse } from "workbox-range-requests";
 import { AssetManager } from "./lib/assetManager.ts";
+import { TILE_CACHE_PREFIX as OFFLINE_TILE_CACHE_PREFIX, createOfflineTileHandler } from "./lib/offlineTileHandler.js";
+import { TRUSTED_TILE_KEYS } from "./lib/tileTrust.js";
 
 cleanupOutdatedCaches();
 
 const assetManager = new AssetManager();
+
+async function postToAllClients(message) {
+  try {
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of clients) c.postMessage(message);
+  } catch {
+    // ignore client broadcast errors
+  }
+}
+
+// #896: signed, integrity-checked off-grid map tile bundles.
+const offlineTiles = createOfflineTileHandler({
+  cacheStorage: caches,
+  fetchImpl: (input, init) => fetch(input, init),
+  trustedKeys: TRUSTED_TILE_KEYS,
+  notify: (message) => postToAllClients(message),
+  origin: self.location.origin,
+});
 
 const manifest = self.__WB_MANIFEST || [];
 precacheAndRoute(manifest);
@@ -101,7 +121,9 @@ self.addEventListener("activate", (event) => {
             cacheName !== TILES_CACHE_NAME &&
             // Offline routing tiles (#893) are versioned and verified by the
             // app; a service worker update must not wipe them.
-            !cacheName.startsWith("helphone-routing-tiles-")
+            !cacheName.startsWith("helphone-routing-tiles-") &&
+            // Offline map tile bundles (#896) manage their own versions.
+            !cacheName.startsWith(OFFLINE_TILE_CACHE_PREFIX)
           ) {
             return caches.delete(cacheName);
           }
@@ -146,6 +168,16 @@ self.addEventListener("fetch", (event) => {
         return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${full.headers.get("content-length") || 0}` } });
       }
     })());
+    return;
+  }
+
+  if (
+    request.method === "GET" &&
+    url.origin === self.location.origin &&
+    url.pathname.startsWith("/offline-tiles/") &&
+    offlineTiles.parse(url.pathname)
+  ) {
+    event.respondWith(offlineTiles.handle(url.pathname).then((res) => res || fetch(request)));
     return;
   }
 
@@ -288,6 +320,19 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("message", (event) => {
   const data = event.data || {};
+
+  // #896: package an incident zone's map tiles for offline use.
+  if (data.type === "OFFLINE_TILES_INSTALL" && typeof data.zone === "string") {
+    event.waitUntil(
+      offlineTiles
+        .install(data.zone, {
+          onProgress: (p) => postToAllClients({ type: "OFFLINE_TILES_PROGRESS", zone: data.zone, ...p }),
+        })
+        .then((result) => postToAllClients({ type: "OFFLINE_TILES_INSTALLED", ...result }))
+        .catch((err) => postToAllClients({ type: "OFFLINE_TILES_FAILED", zone: data.zone, message: err.message })),
+    );
+    return;
+  }
 
   if (data.type === "GET_ASSET_STATS") {
     event.waitUntil(
