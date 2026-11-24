@@ -41,6 +41,10 @@ unchecked CODEOWNERS review items.
 | [ADR-022](ADR-022-ble-proximity-relay.md) | BLE Proximity Relay: Authenticated Beacon Format & Shippable-Scope Decision | Deferred (expires 2027-Q1, owner: @helphone-pwa-owner) | ISP-113 / #783 |
 | [ADR-022](ADR-022-honest-dispatch-eta.md) | Honest Dispatch ETA: Ranges, Fatigue Pace, and Degraded-State Signalling | Proposed | ISP-105 / #775 |
 | [ADR-023](ADR-023-canonical-contract-workspace.md) | Canonical Soroban Contract Workspace | Proposed | #980 |
+| [ADR-024](ADR-024-matrix-call-caching-quota.md) | Matrix Call Caching and Quota Policy | Proposed | — |
+| [ADR-025](ADR-025-liability-signoff-workflow.md) | Liability Sign-off for Triage Shedding | Proposed | — |
+| [ADR-026](ADR-026-uv-tier-policy.md) | UV-tier policy for sensitive endpoints | Accepted (enforcement on the protected route and session-bound GraphQL mutations; remaining routes listed below as follow-up) | ISP-059 / #729, issue #924 |
+| [ADR-027](ADR-027-twin-module-canonicalization.md) | One canonical module per name (`.js`/`.ts` twins) | Accepted | #901 |
 <!-- ADR-INDEX-END -->
 
 ## Evidence status
